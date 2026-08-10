@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>気配</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0b0d10; color: #cfd4da; overflow: hidden;
+    font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none; user-select: none;
+  }
+  /* ---- ト-3 気配（fog）: 円1つ。数値・文字は持たない ---- */
+  #fog {
+    position: fixed; top: 50%; left: 50%;
+    width: 62vmin; height: 62vmin; margin: -31vmin 0 0 -31vmin;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 45%,
+                #eaf3ef 0%, #9fc7b4 38%, #4d7f68 68%, rgba(30,54,45,0) 78%);
+    opacity: 0; pointer-events: none;
+    transition: opacity 200ms linear;
+  }
+  /* ---- 未接続のときだけ出るボタン ---- */
+  #btnStart {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    min-width: 168px; min-height: 60px; padding: 12px 26px;
+    font-size: 17px; font-family: inherit; letter-spacing: .18em;
+    color: #cfd4da; background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.22); border-radius: 34px;
+  }
+  #btnStart:active { background: rgba(255,255,255,.11); }
+  /* ---- 開閉ボタン（要件2-4。文字を持たせず記号1つ） ---- */
+  #btnPanel {
+    position: fixed; right: 14px; bottom: 14px; width: 44px; height: 44px;
+    border-radius: 22px; border: 1px solid rgba(255,255,255,.16);
+    background: rgba(255,255,255,.04); color: #8b939c;
+    font-size: 17px; line-height: 1; font-family: inherit;
+  }
+  #btnPanel:active { background: rgba(255,255,255,.12); }
+  /* ---- 開いたときだけ出る数値行 ---- */
+  #panel {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: none; padding: 14px 16px 70px;
+    background: rgba(8,10,13,.94); border-top: 1px solid rgba(255,255,255,.12);
+    font-size: 13.5px; line-height: 1.7; font-variant-numeric: tabular-nums;
+    max-height: 62vh; overflow-y: auto;
+    -webkit-user-select: text; user-select: text;
+  }
+  #panel.open { display: block; }
+  #panel dl { margin: 0; display: grid; grid-template-columns: 8.5em 1fr; gap: 2px 10px; }
+  #panel dt { color: #767f89; }
+  #panel dd { margin: 0; color: #dfe4ea; word-break: break-all; }
+  #panel dd.err { color: #ff9d9d; }
+</style>
+</head>
+<body>
+
+<div id="fog"></div>
+<button id="btnStart">はじまる</button>
+<button id="btnPanel" aria-label="内訳">⌃</button>
+
+<div id="panel">
+  <dl>
+    <dt>つながり</dt>      <dd id="vConn">まだ つながっていない</dd>
+    <dt>届いている値</dt>  <dd id="vCC">—</dd>
+    <dt>鳴っている音</dt>  <dd id="vNote">—</dd>
+    <dt>毎秒の受信</dt>    <dd id="vRate">0 件/秒</dd>
+    <dt>エラー</dt>        <dd id="vErr" class="err">—</dd>
+  </dl>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+<script>
+"use strict";
+
+/* ==================================================================
+   定数（要件定義書 §7）— ここだけ書き換えれば振る舞いが変わる
+================================================================== */
+var SCALE            = [0, 2, 4, 5, 7, 9, 10];  // ミクソリディアン（D-8）
+var ROOT_NOTE        = 57;      // 主音のMIDIノート番号（A3）
+var OCTAVES          = 3;       // 使うオクターブ数（論点3の決定で2→3）
+var CC_TARGET        = 80;      // 使うCC番号（2026-08-10の実測で確定）
+var CC_MIN           = 0;       // 目盛りの下端（論点1・案1）
+var CC_MAX           = 127;     // 目盛りの上端（論点1・案1）
+var SMOOTH_N         = 1;       // 移動平均の窓（1＝ならさない）
+var MIN_INTERVAL_MS  = 150;     // 発音の最短間隔
+var MAX_VOICES       = 4;       // 同時に鳴らす音の上限
+var NOTE_LENGTH      = "8n";    // 1音を鳴らす長さ
+var SILENCE_MS       = 1500;    // 途絶とみなす無受信時間
+var FOG_MIN          = 0.05;    // 円の不透明度の下限
+var FOG_MAX          = 0.9;     // 円の不透明度の上限
+var FOG_FADE_MS      = 2000;    // 途絶時に円が消えるまでの時間
+var LIMITER_DB       = -6;      // 音量の上限装置のしきい値
+
+var STEPS = SCALE.length * OCTAVES + 1;   // 段の総数（要件3-3）
+
+/* BLE-MIDI の決められた番号（MIDI over BLE の標準値） */
+var MIDI_SERVICE = "03b80e5a-ede8-4b33-a751-6ce34ec4c700";
+var MIDI_CHAR    = "7772e5db-3868-4112-a1a9-f2669d106bf3";
+
+/* ==================================================================
+   状態
+================================================================== */
+var elFog   = document.getElementById("fog");
+var elStart = document.getElementById("btnStart");
+var elPanel = document.getElementById("panel");
+
+var device = null;
+var state = "未接続";                 // 未接続 / 受信中 / 途絶 / 切断（§6）
+var audioReady = false;
+var synth = null, limiter = null, noteMs = 250;
+
+var buf = [];                         // 移動平均用
+var lastStep = null;                  // 直前に鳴らした段（要件4-1）
+var lastPlayAt = 0;                   // 直前に鳴らした時刻（要件4-2）
+var active = [];                      // 鳴っている音 [{midi, endAt}]（要件4-3）
+var lastCcAt = 0;                     // 対象CCの最終受信時刻（§6 途絶の判定）
+var lastCcNum = null, lastCcVal = null;
+var lastNoteName = "—";
+var rateWindow = [];                  // 直近1秒の受信時刻
+var fogBase = 0;                      // いま保つべき不透明度
+
+/* ==================================================================
+   エラーは握りつぶさない（要件2-6）
+================================================================== */
+function pushError(where, e) {
+  var t = (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : String(e));
+  document.getElementById("vErr").textContent = hhmmss(Date.now()) + " [" + where + "] " + t;
+}
+window.addEventListener("error", function (ev) {
+  pushError("window.onerror", ev.error || { name: "Error", message: ev.message });
+});
+window.addEventListener("unhandledrejection", function (ev) {
+  pushError("unhandledrejection", ev.reason);
+});
+
+function hhmmss(t) {
+  var d = new Date(t);
+  function z(n) { return (n < 10 ? "0" : "") + n; }
+  return z(d.getHours()) + ":" + z(d.getMinutes()) + ":" + z(d.getSeconds());
+}
+
+/* ==================================================================
+   機能3: マッピング（要件3-1〜3-5）
+================================================================== */
+function smooth(v) {                                   // 3-2
+  buf.push(v);
+  while (buf.length > SMOOTH_N) buf.shift();
+  var sum = 0;
+  for (var i = 0; i < buf.length; i++) sum += buf[i];
+  return sum / buf.length;
+}
+
+function quantize(v) {                                 // 3-3
+  var span = (CC_MAX - CC_MIN + 1) / STEPS;
+  var s = Math.floor((v - CC_MIN) / span);
+  if (s < 0) s = 0;
+  if (s > STEPS - 1) s = STEPS - 1;
+  return s;
+}
+
+function stepToMidi(s) {                               // 3-4
+  var oct = Math.floor(s / SCALE.length);
+  var pos = s % SCALE.length;
+  return ROOT_NOTE + oct * 12 + SCALE[pos];
+}
+
+/* ==================================================================
+   機能4: 出音（要件4-1〜4-6）
+================================================================== */
+function buildAudio() {                                // 4-4・4-5: 起動時に1組だけ作る
+  limiter = new Tone.Limiter(LIMITER_DB).toDestination();
+  synth = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: "triangle" },
+    envelope: { attack: 0.02, decay: 0.25, sustain: 0.25, release: 1.2 }
+  });
+  synth.volume.value = -10;
+  synth.connect(limiter);
+  noteMs = Tone.Time(NOTE_LENGTH).toMilliseconds();
+  audioReady = true;
+}
+
+function midiToFreq(m) { return Tone.Frequency(m, "midi").toFrequency(); }
+
+function play(midi) {
+  if (!audioReady) return;
+  var now = Date.now();
+  active = active.filter(function (a) { return a.endAt > now; });
+  while (active.length >= MAX_VOICES) {                // 4-3: 最も古い音を止めて置き換える
+    var old = active.shift();
+    try { synth.triggerRelease(midiToFreq(old.midi)); } catch (e) { pushError("release", e); }
+  }
+  try {
+    synth.triggerAttackRelease(midiToFreq(midi), NOTE_LENGTH);
+  } catch (e) {
+    pushError("play", e); return;
+  }
+  active.push({ midi: midi, endAt: now + noteMs });
+  lastNoteName = Tone.Frequency(midi, "midi").toNote();
+  flashFog();                                          // 2-2
+}
+
+function stopAll() {                                   // §6 途絶・切断
+  if (audioReady && synth) {
+    try { synth.releaseAll(); } catch (e) { pushError("stopAll", e); }
+  }
+  active = [];
+  lastStep = null;      // 再開したとき最初の1音を鳴らすため
+  buf = [];
+}
+
+/* ==================================================================
+   機能2: 信号確認（要件2-1〜2-6）
+================================================================== */
+function setFog(v) {                                   // 2-1
+  var r = (v - CC_MIN) / (CC_MAX - CC_MIN);
+  if (r < 0) r = 0;
+  if (r > 1) r = 1;
+  fogBase = FOG_MIN + (FOG_MAX - FOG_MIN) * r;
+  elFog.style.transition = "opacity 200ms linear";
+  elFog.style.opacity = fogBase;
+}
+
+function flashFog() {                                  // 2-2
+  elFog.style.transition = "opacity 60ms linear";
+  elFog.style.opacity = FOG_MAX;
+  setTimeout(function () {
+    elFog.style.transition = "opacity 320ms ease-out";
+    elFog.style.opacity = fogBase;
+  }, 70);
+}
+
+function fadeFogOut() {                                // §6 途絶
+  fogBase = 0;
+  elFog.style.transition = "opacity " + FOG_FADE_MS + "ms ease-out";
+  elFog.style.opacity = 0;
+}
+
+document.getElementById("btnPanel").addEventListener("click", function () {
+  elPanel.classList.toggle("open");                    // 2-4・2-5: 保存しない
+  this.textContent = elPanel.classList.contains("open") ? "⌄" : "⌃";
+});
+
+function renderPanel() {
+  if (!elPanel.classList.contains("open")) return;
+  var now = Date.now();
+  while (rateWindow.length && now - rateWindow[0] > 1000) rateWindow.shift();
+  document.getElementById("vConn").textContent =
+    state + (device && device.name ? "（" + device.name + "）" : "");
+  document.getElementById("vCC").textContent =
+    (lastCcNum === null) ? "—" : ("CC" + lastCcNum + " = " + lastCcVal);
+  document.getElementById("vNote").textContent = lastNoteName;
+  document.getElementById("vRate").textContent = rateWindow.length + " 件/秒";
+}
+
+/* ==================================================================
+   受信（機能1・確定済み）
+================================================================== */
+function parseBleMidi(b) {
+  var out = [];
+  if (!b || b.length < 3) return out;
+  var i = 1, running = 0;
+  while (i < b.length) {
+    if (b[i] & 0x80) { i++; if (i >= b.length) break; }
+    var status;
+    if (b[i] & 0x80) {
+      status = b[i]; i++;
+      if (status >= 0xF8) { out.push({ status: status, d1: null, d2: null }); continue; }
+      running = (status < 0xF0) ? status : 0;
+    } else {
+      status = running;
+      if (!status) { i++; continue; }
+    }
+    var need;
+    if (status === 0xF0) {
+      while (i < b.length && b[i] !== 0xF7) i++;
+      i++;
+      out.push({ status: 0xF0, d1: null, d2: null });
+      continue;
+    } else if (status >= 0xF0) {
+      need = (status === 0xF1 || status === 0xF3) ? 1 : (status === 0xF2 ? 2 : 0);
+    } else {
+      var t = status & 0xF0;
+      need = (t === 0xC0 || t === 0xD0) ? 1 : 2;
+    }
+    if (i + need > b.length) break;
+    var d1 = need >= 1 ? b[i++] : null;
+    var d2 = need >= 2 ? b[i++] : null;
+    out.push({ status: status, d1: d1, d2: d2 });
+  }
+  return out;
+}
+
+function onValue(ev) {
+  try {
+    var dv = ev.target.value;
+    var bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    var msgs = parseBleMidi(bytes);
+    for (var k = 0; k < msgs.length; k++) {
+      var m = msgs[k];
+      // 要件3-1: 対象CC番号以外は捨てる。Note Onも捨てる
+      if (m.status < 0xF0 && (m.status & 0xF0) === 0xB0 && m.d1 === CC_TARGET) {
+        handleCc(m.d1, m.d2);
+      }
+    }
+  } catch (e) {
+    pushError("onValue", e);
+  }
+}
+
+function handleCc(num, val) {
+  var now = Date.now();
+  lastCcNum = num; lastCcVal = val; lastCcAt = now;
+  rateWindow.push(now);
+  if (state !== "受信中") state = "受信中";
+
+  var v = smooth(val);                                 // 3-2
+  var step = quantize(v);                              // 3-3
+
+  if (step !== lastStep) {                             // 4-1
+    if (now - lastPlayAt >= MIN_INTERVAL_MS) {         // 4-2
+      lastStep = step;
+      lastPlayAt = now;
+      play(stepToMidi(step));
+    }
+    // 間隔が足りないときは段を更新しない。次の受信で改めて判定する
+  }
+  setFog(val);                                         // 2-1（生の値に同期）
+}
+
+/* ==================================================================
+   接続と状態遷移（§6）
+================================================================== */
+function start() {
+  if (!navigator.bluetooth) {
+    pushError("start", { name: "NotSupported",
+      message: "このブラウザには navigator.bluetooth がありません（iOSではBluefy等が要ります）" });
+    return;
+  }
+  if (typeof Tone === "undefined") {
+    pushError("start", { name: "ToneNotLoaded",
+      message: "Tone.js を読み込めていません（回線かCDNを確認してください）" });
+    return;
+  }
+
+  // 4-6: 画面を1回触ったこの時点で音を出せる状態にする
+  Tone.start().then(function () {
+    if (!audioReady) buildAudio();
+    return navigator.bluetooth.requestDevice({
+      filters: [{ services: [MIDI_SERVICE] }],
+      optionalServices: [MIDI_SERVICE]
+    });
+  }).then(function (d) {
+    device = d;
+    state = "接続中";
+    d.addEventListener("gattserverdisconnected", onDisconnected);
+    return d.gatt.connect();
+  }).then(function (server) {
+    return server.getPrimaryService(MIDI_SERVICE);
+  }).then(function (service) {
+    return service.getCharacteristic(MIDI_CHAR);
+  }).then(function (ch) {
+    ch.addEventListener("characteristicvaluechanged", onValue);
+    return ch.startNotifications();
+  }).then(function () {
+    state = "途絶";              // つないだ直後は、まだ何も届いていない
+    lastCcAt = Date.now();
+    elStart.style.display = "none";
+  }).catch(function (e) {
+    state = "未接続";
+    pushError("start", e);
+  });
+}
+
+function onDisconnected() {
+  state = "切断";
+  stopAll();
+  fadeFogOut();
+  elStart.style.display = "";
+}
+
+elStart.addEventListener("click", start);
+
+/* 途絶の見張り（§6） */
+setInterval(function () {
+  var now = Date.now();
+  if (state === "受信中" && now - lastCcAt > SILENCE_MS) {
+    state = "途絶";
+    stopAll();                                         // D-14: 鳴っている音をすべて止める
+    fadeFogOut();
+  }
+  renderPanel();
+}, 200);
+</script>
+</body>
+</html>
