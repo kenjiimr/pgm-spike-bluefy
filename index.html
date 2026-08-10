@@ -348,8 +348,10 @@ function start() {
   // 4-6: 画面を1回触ったこの時点で音を出せる状態にする
   Tone.start().then(function () {
     if (!audioReady) buildAudio();
+    // PlantWaveはBLEの広告にMIDIサービスを載せていないため、
+    // filters を使うと機器一覧に出てこない（2026-08-10 実測）
     return navigator.bluetooth.requestDevice({
-      filters: [{ services: [MIDI_SERVICE] }],
+      acceptAllDevices: true,
       optionalServices: [MIDI_SERVICE]
     });
   }).then(function (d) {
