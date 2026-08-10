@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PGM 実測 — 表示のみ（音は鳴りません）</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 12px 12px 64px;
+    background: #14161a; color: #e8e8e8;
+    font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+    font-size: 15px; line-height: 1.5;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 20px 0 6px; padding-bottom: 4px; border-bottom: 1px solid #333; }
+  .note { font-size: 13px; color: #9aa0a6; margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+  button {
+    flex: 1 1 auto; min-height: 48px; padding: 10px 14px;
+    font-size: 15px; font-family: inherit;
+    border: 1px solid #3a4048; border-radius: 8px;
+    background: #263040; color: #e8e8e8;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:active { background: #34425a; }
+  button.sub { background: #1c2026; color: #9aa0a6; flex: 0 1 auto; min-height: 40px; font-size: 13px; }
+  button:disabled { opacity: 0.4; }
+  #btnPhase { width: 100%; min-height: 64px; font-size: 16px; font-weight: bold; }
+  #btnPhase.touching { background: #2f5d3a; border-color: #4a8a5c; }
+  #btnPhase.away     { background: #2a3038; border-color: #444c56; }
+  .status { padding: 8px 10px; border-radius: 6px; background: #1c2026; font-size: 13px; margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 5px 4px; border-bottom: 1px solid #2a2e35; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: #9aa0a6; font-weight: normal; }
+  .empty { color: #6b7280; font-size: 13px; padding: 6px 0; }
+  pre { margin: 0; padding: 8px; background: #0f1114; border-radius: 6px;
+        font-size: 11px; line-height: 1.45; overflow-x: auto; white-space: pre; }
+  #errs .err { padding: 6px 8px; margin-bottom: 4px; border-radius: 6px;
+               background: #3a1e1e; color: #ffbdbd; font-size: 12px; word-break: break-all; }
+  #copyArea { width: 100%; height: 140px; display: none; margin-top: 8px;
+              background: #0f1114; color: #e8e8e8; border: 1px solid #3a4048;
+              border-radius: 6px; font-size: 11px; padding: 6px; }
+  #copyState { font-size: 12px; color: #9aa0a6; min-height: 16px; }
+</style>
+</head>
+<body>
+
+<h1>PGM 実測ページ（要件定義書 §8）</h1>
+<p class="note">
+  このページは<strong>音を鳴らしません</strong>。届いたMIDIを数えて表示するだけです。<br>
+  測るもの: 8-1 届くCC番号の内訳／8-2 到着頻度／8-3 触れる・離すでの値の範囲／8-4 Note Onの有無
+</p>
+
+<div class="row">
+  <button id="btnConnect">接続する</button>
+  <button id="btnConnectAll" class="sub">全機器から選ぶ</button>
+</div>
+<div id="conn" class="status">未接続</div>
+
+<button id="btnPhase" class="away">いま: 離している<br><span style="font-size:12px;font-weight:normal">タップで「触れている」に切り替わります</span></button>
+
+<div class="row">
+  <button id="btnReset" class="sub">集計をリセット</button>
+  <button id="btnCopy">結果をコピー</button>
+</div>
+<div id="copyState"></div>
+<textarea id="copyArea" readonly></textarea>
+
+<h2>8-1 / 8-2 / 8-3　CC番号ごと（全体）</h2>
+<div id="ccWrap"></div>
+
+<h2>8-3　区間ごと（触れている／離している）</h2>
+<div id="phaseWrap"></div>
+
+<h2>8-4　Note On / Note Off</h2>
+<div id="noteWrap"></div>
+
+<h2>その他のメッセージ</h2>
+<div id="otherWrap"></div>
+
+<h2>エラー（原文）</h2>
+<div id="errs"><div class="empty">なし</div></div>
+
+<h2>生ログ（直近40件・新しいものが上）</h2>
+<pre id="log">（未受信）</pre>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------
+   BLE-MIDI の決められた番号（MIDI over BLE の標準値）
+------------------------------------------------------------------ */
+var MIDI_SERVICE = "03b80e5a-ede8-4b33-a751-6ce34ec4c700";
+var MIDI_CHAR    = "7772e5db-3868-4112-a1a9-f2669d106bf3";
+
+var LOG_MAX = 40;
+
+/* ------------------------------------------------------------------
+   状態
+------------------------------------------------------------------ */
+var device = null, characteristic = null;
+var startedAt = null;              // 計測開始（最初の受信ではなくリセット/接続時刻）
+var total = 0;
+var cc = {};                       // 番号 -> {count,min,max,last,lastAt}
+var noteOn = { count: 0, notes: {} };
+var noteOff = { count: 0 };
+var other = {};                    // 表示名 -> 件数
+var recent = [];                   // 直近1秒の件数用 [{t, num}]
+var log = [];
+var errors = [];
+var segments = [];                 // [{label, startAt, endAt, cc:{num:{count,min,max}}}]
+var phase = "離";
+
+/* ------------------------------------------------------------------
+   エラーは握りつぶさない（要件2-6と同じ方針）
+------------------------------------------------------------------ */
+function pushError(where, e) {
+  var text = (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : String(e));
+  errors.unshift({ t: new Date(), where: where, text: text });
+  if (errors.length > 20) errors.pop();
+  renderErrors();
+}
+window.addEventListener("error", function (ev) {
+  pushError("window.onerror", ev.error || { name: "Error", message: ev.message });
+});
+window.addEventListener("unhandledrejection", function (ev) {
+  pushError("unhandledrejection", ev.reason);
+});
+
+/* ------------------------------------------------------------------
+   計測のリセット
+------------------------------------------------------------------ */
+function resetStats() {
+  startedAt = Date.now();
+  total = 0; cc = {}; noteOn = { count: 0, notes: {} }; noteOff = { count: 0 };
+  other = {}; recent = []; log = [];
+  segments = [{ label: phase, startAt: startedAt, endAt: null, cc: {} }];
+  render();
+}
+
+function currentSegment() { return segments[segments.length - 1]; }
+
+function togglePhase() {
+  var now = Date.now();
+  if (segments.length) currentSegment().endAt = now;
+  phase = (phase === "触") ? "離" : "触";
+  segments.push({ label: phase, startAt: now, endAt: null, cc: {} });
+  var b = document.getElementById("btnPhase");
+  if (phase === "触") {
+    b.className = "touching";
+    b.innerHTML = 'いま: <b>触れている</b><br><span style="font-size:12px;font-weight:normal">タップで「離している」に切り替わります</span>';
+  } else {
+    b.className = "away";
+    b.innerHTML = 'いま: 離している<br><span style="font-size:12px;font-weight:normal">タップで「触れている」に切り替わります</span>';
+  }
+  render();
+}
+
+/* ------------------------------------------------------------------
+   接続
+------------------------------------------------------------------ */
+function setConn(text) { document.getElementById("conn").textContent = text; }
+
+function connect(acceptAll) {
+  if (!navigator.bluetooth) {
+    pushError("connect", { name: "NotSupported",
+      message: "このブラウザには navigator.bluetooth がありません（iOSではBluefy等が要ります）" });
+    return;
+  }
+  var opts = acceptAll
+    ? { acceptAllDevices: true, optionalServices: [MIDI_SERVICE] }
+    : { filters: [{ services: [MIDI_SERVICE] }], optionalServices: [MIDI_SERVICE] };
+
+  setConn("機器を選んでいます…");
+  navigator.bluetooth.requestDevice(opts)
+    .then(function (d) {
+      device = d;
+      setConn("接続中… (" + (d.name || "名前なし") + ")");
+      d.addEventListener("gattserverdisconnected", onDisconnected);
+      return d.gatt.connect();
+    })
+    .then(function (server) {
+      setConn("サービスを探しています…");
+      return server.getPrimaryService(MIDI_SERVICE);
+    })
+    .then(function (service) { return service.getCharacteristic(MIDI_CHAR); })
+    .then(function (ch) {
+      characteristic = ch;
+      ch.addEventListener("characteristicvaluechanged", onValue);
+      return ch.startNotifications();
+    })
+    .then(function () {
+      setConn("接続済み: " + (device && device.name ? device.name : "名前なし") + "　受信を待っています");
+      resetStats();
+    })
+    .catch(function (e) {
+      setConn("接続できませんでした（下のエラー欄を見てください）");
+      pushError("connect", e);
+    });
+}
+
+function onDisconnected() {
+  setConn("切断されました。もう一度「接続する」を押してください");
+  characteristic = null;
+}
+
+/* ------------------------------------------------------------------
+   BLE-MIDI のバイト列をMIDIメッセージへ分解する
+   形: [ヘッダ][時刻][ステータス][データ…] [時刻][…] …
+   ・時刻・ステータスは最上位ビットが1、データは0
+   ・ランニングステータス（ステータス省略）に対応する
+------------------------------------------------------------------ */
+function parseBleMidi(b) {
+  var out = [];
+  if (!b || b.length < 3) return out;
+  var i = 1;                 // 0はヘッダ
+  var running = 0;
+  while (i < b.length) {
+    if (b[i] & 0x80) { i++; if (i >= b.length) break; }   // 時刻バイト
+    var status;
+    if (b[i] & 0x80) {
+      status = b[i]; i++;
+      if (status >= 0xF8) { out.push({ status: status, d1: null, d2: null }); continue; }
+      running = (status < 0xF0) ? status : 0;
+    } else {
+      status = running;
+      if (!status) { i++; continue; }                     // 迷子のデータバイトは捨てる
+    }
+    var need;
+    if (status === 0xF0) {                                // SysExは終端まで読み飛ばす
+      while (i < b.length && b[i] !== 0xF7) i++;
+      i++;
+      out.push({ status: 0xF0, d1: null, d2: null });
+      continue;
+    } else if (status >= 0xF0) {
+      need = (status === 0xF1 || status === 0xF3) ? 1 : (status === 0xF2 ? 2 : 0);
+    } else {
+      var t = status & 0xF0;
+      need = (t === 0xC0 || t === 0xD0) ? 1 : 2;
+    }
+    if (i + need > b.length) break;                        // 途中で切れている
+    var d1 = need >= 1 ? b[i++] : null;
+    var d2 = need >= 2 ? b[i++] : null;
+    out.push({ status: status, d1: d1, d2: d2 });
+  }
+  return out;
+}
+
+function statusLabel(st) {
+  if (st >= 0xF8) {
+    var rt = { 0xF8: "Clock", 0xFA: "Start", 0xFB: "Continue", 0xFC: "Stop",
+               0xFE: "ActiveSensing", 0xFF: "Reset" };
+    return rt[st] || ("SysRT 0x" + st.toString(16));
+  }
+  if (st === 0xF0) return "SysEx";
+  var t = st & 0xF0;
+  var n = { 0x80: "NoteOff", 0x90: "NoteOn", 0xA0: "PolyAT", 0xB0: "CC",
+            0xC0: "Program", 0xD0: "ChanAT", 0xE0: "PitchBend" };
+  return (n[t] || ("0x" + t.toString(16))) + " ch" + ((st & 0x0F) + 1);
+}
+
+/* ------------------------------------------------------------------
+   受信
+------------------------------------------------------------------ */
+function onValue(ev) {
+  try {
+    var dv = ev.target.value;
+    var bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    var msgs = parseBleMidi(bytes);
+    var now = Date.now();
+    if (startedAt === null) resetStats();
+    for (var k = 0; k < msgs.length; k++) tally(msgs[k], now, bytes);
+  } catch (e) {
+    pushError("onValue", e);
+  }
+}
+
+function tally(m, now, rawBytes) {
+  total++;
+  var st = m.status, type = st & 0xF0, line;
+
+  if (st < 0xF0 && type === 0xB0) {
+    var num = m.d1, val = m.d2;
+    var s = cc[num];
+    if (!s) { s = cc[num] = { count: 0, min: 999, max: -1, last: null, lastAt: null }; }
+    s.count++; s.last = val; s.lastAt = now;
+    if (val < s.min) s.min = val;
+    if (val > s.max) s.max = val;
+
+    var seg = currentSegment();
+    if (seg) {
+      var ss = seg.cc[num];
+      if (!ss) { ss = seg.cc[num] = { count: 0, min: 999, max: -1 }; }
+      ss.count++;
+      if (val < ss.min) ss.min = val;
+      if (val > ss.max) ss.max = val;
+    }
+    recent.push({ t: now, num: num });
+    line = "CC " + pad(num, 3) + "  値 " + pad(val, 3) + "  ch" + ((st & 0x0F) + 1);
+
+  } else if (type === 0x90 && st < 0xF0 && m.d2 > 0) {
+    noteOn.count++;
+    noteOn.notes[m.d1] = (noteOn.notes[m.d1] || 0) + 1;
+    line = "NoteOn  note " + pad(m.d1, 3) + " vel " + pad(m.d2, 3) + "  ch" + ((st & 0x0F) + 1);
+
+  } else if (st < 0xF0 && (type === 0x80 || (type === 0x90 && m.d2 === 0))) {
+    noteOff.count++;
+    line = "NoteOff note " + pad(m.d1, 3) + "  ch" + ((st & 0x0F) + 1);
+
+  } else {
+    var lab = statusLabel(st);
+    other[lab] = (other[lab] || 0) + 1;
+    line = lab + (m.d1 === null ? "" : "  " + m.d1 + (m.d2 === null ? "" : " " + m.d2));
+  }
+
+  log.unshift(hhmmss(now) + " [" + phase + "] " + line);
+  if (log.length > LOG_MAX) log.length = LOG_MAX;
+}
+
+/* ------------------------------------------------------------------
+   表示
+------------------------------------------------------------------ */
+function pad(n, w) { var s = String(n); while (s.length < w) s = " " + s; return s; }
+function hhmmss(t) {
+  var d = new Date(t);
+  function z(n, w) { var s = String(n); while (s.length < w) s = "0" + s; return s; }
+  return z(d.getHours(), 2) + ":" + z(d.getMinutes(), 2) + ":" + z(d.getSeconds(), 2) + "." + z(d.getMilliseconds(), 3);
+}
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function secs(a, b) { return ((b - a) / 1000); }
+
+function elapsed() {
+  return startedAt === null ? 0 : Math.max(0.001, (Date.now() - startedAt) / 1000);
+}
+
+function pruneRecent(now) {
+  while (recent.length && now - recent[0].t > 1000) recent.shift();
+}
+
+function ccRows() {
+  var now = Date.now();
+  pruneRecent(now);
+  var per1s = {};
+  for (var i = 0; i < recent.length; i++) per1s[recent[i].num] = (per1s[recent[i].num] || 0) + 1;
+
+  var nums = Object.keys(cc).map(Number).sort(function (a, b) { return cc[b].count - cc[a].count; });
+  var el = elapsed();
+  return nums.map(function (n) {
+    var s = cc[n];
+    return {
+      num: n, count: s.count,
+      min: s.min === 999 ? "-" : s.min,
+      max: s.max === -1 ? "-" : s.max,
+      last: s.last === null ? "-" : s.last,
+      avg: (s.count / el).toFixed(1),
+      now1s: per1s[n] || 0
+    };
+  });
+}
+
+function render() {
+  // --- CC全体 ---
+  var rows = ccRows();
+  var h;
+  if (!rows.length) {
+    h = '<div class="empty">CCはまだ届いていません</div>';
+  } else {
+    h = '<table><tr><th>CC番号</th><th>件数</th><th>最小</th><th>最大</th><th>直近値</th><th>毎秒平均</th><th>直近1秒</th></tr>';
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      h += "<tr><td>" + r.num + "</td><td>" + r.count + "</td><td>" + r.min + "</td><td>" + r.max +
+           "</td><td>" + r.last + "</td><td>" + r.avg + "</td><td>" + r.now1s + "</td></tr>";
+    }
+    h += "</table>";
+  }
+  h += '<div class="empty">総メッセージ ' + total + " 件／計測 " + elapsed().toFixed(1) + " 秒</div>";
+  document.getElementById("ccWrap").innerHTML = h;
+
+  // --- 区間ごと ---
+  var ph = "";
+  var any = false;
+  for (var s = 0; s < segments.length; s++) {
+    var seg = segments[s];
+    var end = seg.endAt || Date.now();
+    var keys = Object.keys(seg.cc).map(Number).sort(function (a, b) { return a - b; });
+    ph += '<div class="empty">#' + (s + 1) + "　" +
+          (seg.label === "触" ? "触れている" : "離している") + "　" +
+          secs(seg.startAt, end).toFixed(1) + " 秒" + (seg.endAt ? "" : "（進行中）") + "</div>";
+    if (keys.length) {
+      any = true;
+      ph += "<table><tr><th>CC番号</th><th>件数</th><th>最小</th><th>最大</th></tr>";
+      for (var j = 0; j < keys.length; j++) {
+        var k = keys[j], c = seg.cc[k];
+        ph += "<tr><td>" + k + "</td><td>" + c.count + "</td><td>" +
+              (c.min === 999 ? "-" : c.min) + "</td><td>" + (c.max === -1 ? "-" : c.max) + "</td></tr>";
+      }
+      ph += "</table>";
+    }
+  }
+  if (!any) ph += '<div class="empty">区間内のCCはまだありません</div>';
+  document.getElementById("phaseWrap").innerHTML = ph;
+
+  // --- Note ---
+  var nk = Object.keys(noteOn.notes).map(Number).sort(function (a, b) { return a - b; });
+  var nh = '<div class="empty">Note On 総件数 <b>' + noteOn.count + "</b>／Note Off 総件数 <b>" + noteOff.count + "</b></div>";
+  if (nk.length) {
+    nh += "<table><tr><th>ノート番号</th><th>件数</th></tr>";
+    for (var q = 0; q < nk.length; q++) {
+      nh += "<tr><td>" + nk[q] + "</td><td>" + noteOn.notes[nk[q]] + "</td></tr>";
+    }
+    nh += "</table>";
+  }
+  document.getElementById("noteWrap").innerHTML = nh;
+
+  // --- その他 ---
+  var ok = Object.keys(other);
+  var oh = "";
+  if (!ok.length) { oh = '<div class="empty">なし</div>'; }
+  else {
+    oh = "<table><tr><th>種別</th><th>件数</th></tr>";
+    for (var p = 0; p < ok.length; p++) {
+      oh += "<tr><td>" + esc(ok[p]) + "</td><td>" + other[ok[p]] + "</td></tr>";
+    }
+    oh += "</table>";
+  }
+  document.getElementById("otherWrap").innerHTML = oh;
+
+  // --- 生ログ ---
+  document.getElementById("log").textContent = log.length ? log.join("\n") : "（未受信）";
+}
+
+function renderErrors() {
+  var el = document.getElementById("errs");
+  if (!errors.length) { el.innerHTML = '<div class="empty">なし</div>'; return; }
+  var h = "";
+  for (var i = 0; i < errors.length; i++) {
+    h += '<div class="err">' + hhmmss(errors[i].t.getTime()) + " [" + esc(errors[i].where) + "] " +
+         esc(errors[i].text) + "</div>";
+  }
+  el.innerHTML = h;
+}
+
+/* ------------------------------------------------------------------
+   結果のコピー
+------------------------------------------------------------------ */
+function buildReport() {
+  var L = [];
+  L.push("# PGM 実測結果  " + new Date().toString());
+  L.push("計測時間 " + elapsed().toFixed(1) + " 秒 / 総メッセージ " + total + " 件 / 機器 " +
+         (device && device.name ? device.name : "不明"));
+  L.push("");
+  L.push("## 8-1,8-2,8-3 CC番号ごと（全体）");
+  L.push("CC番号\t件数\t最小\t最大\t直近\t毎秒平均");
+  var rows = ccRows();
+  if (!rows.length) L.push("（CCの受信なし）");
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    L.push(r.num + "\t" + r.count + "\t" + r.min + "\t" + r.max + "\t" + r.last + "\t" + r.avg);
+  }
+  L.push("");
+  L.push("## 8-3 区間ごと");
+  for (var s = 0; s < segments.length; s++) {
+    var seg = segments[s], end = seg.endAt || Date.now();
+    var keys = Object.keys(seg.cc).map(Number).sort(function (a, b) { return a - b; });
+    var parts = keys.map(function (k) {
+      var c = seg.cc[k];
+      return "CC" + k + ": " + c.count + "件 min=" + (c.min === 999 ? "-" : c.min) +
+             " max=" + (c.max === -1 ? "-" : c.max);
+    });
+    L.push("#" + (s + 1) + " " + (seg.label === "触" ? "触れている" : "離している") + " " +
+           secs(seg.startAt, end).toFixed(1) + "s | " + (parts.length ? parts.join(" / ") : "（CCなし）"));
+  }
+  L.push("");
+  L.push("## 8-4 Note On / Note Off");
+  L.push("Note On 総件数 " + noteOn.count + " / Note Off 総件数 " + noteOff.count);
+  var nk = Object.keys(noteOn.notes).map(Number).sort(function (a, b) { return a - b; });
+  L.push("Note On 内訳: " + (nk.length ? nk.map(function (n) { return "note" + n + ":" + noteOn.notes[n]; }).join(" ") : "なし"));
+  L.push("");
+  L.push("## その他のメッセージ");
+  var ok = Object.keys(other);
+  L.push(ok.length ? ok.map(function (k) { return k + ":" + other[k]; }).join(" / ") : "なし");
+  L.push("");
+  L.push("## エラー");
+  if (!errors.length) L.push("なし");
+  for (var e = 0; e < errors.length; e++) {
+    L.push(hhmmss(errors[e].t.getTime()) + " [" + errors[e].where + "] " + errors[e].text);
+  }
+  L.push("");
+  L.push("## 生ログ（直近" + LOG_MAX + "件・新しいものが上）");
+  L.push(log.length ? log.join("\n") : "（未受信）");
+  return L.join("\n");
+}
+
+function copyReport() {
+  var text = buildReport();
+  var st = document.getElementById("copyState");
+  var ta = document.getElementById("copyArea");
+  ta.value = text;
+  function fallback(msg) {
+    ta.style.display = "block";
+    ta.focus(); ta.select();
+    st.textContent = msg + " 下の枠の文字を長押しで選んでコピーしてください。";
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () {
+      ta.style.display = "none";
+      st.textContent = "コピーしました（" + text.length + "文字）。チャットへ貼ってください。";
+    }).catch(function (e) {
+      pushError("copy", e);
+      fallback("自動コピーができませんでした。");
+    });
+  } else {
+    fallback("このブラウザは自動コピーに対応していません。");
+  }
+}
+
+/* ------------------------------------------------------------------
+   起動
+------------------------------------------------------------------ */
+document.getElementById("btnConnect").addEventListener("click", function () { connect(false); });
+document.getElementById("btnConnectAll").addEventListener("click", function () { connect(true); });
+document.getElementById("btnPhase").addEventListener("click", togglePhase);
+document.getElementById("btnCopy").addEventListener("click", copyReport);
+document.getElementById("btnReset").addEventListener("click", function () {
+  errors = []; renderErrors(); resetStats();
+});
+
+resetStats();
+setInterval(render, 200);
+</script>
+</body>
+</html>
