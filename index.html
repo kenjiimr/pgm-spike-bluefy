@@ -66,6 +66,7 @@
     <dt>つながり</dt>      <dd id="vConn">まだ つながっていない</dd>
     <dt>届いている値</dt>  <dd id="vCC">—</dd>
     <dt>鳴っている音</dt>  <dd id="vNote">—</dd>
+    <dt>出た音名</dt>      <dd id="vSeen">—</dd>
     <dt>毎秒の受信</dt>    <dd id="vRate">0 件/秒</dd>
     <dt>エラー</dt>        <dd id="vErr" class="err">—</dd>
   </dl>
@@ -119,6 +120,7 @@ var active = [];                      // 鳴っている音 [{midi, endAt}]（�
 var lastCcAt = 0;                     // 対象CCの最終受信時刻（§6 途絶の判定）
 var lastCcNum = null, lastCcVal = null;
 var lastNoteName = "—";
+var seenMidi = {};                    // 出た音名の記録（EC-2の確認用）
 var rateWindow = [];                  // 直近1秒の受信時刻
 var fogBase = 0;                      // いま保つべき不透明度
 
@@ -199,6 +201,7 @@ function play(midi) {
   }
   active.push({ midi: midi, endAt: now + noteMs });
   lastNoteName = Tone.Frequency(midi, "midi").toNote();
+  seenMidi[midi] = (seenMidi[midi] || 0) + 1;
   flashFog();                                          // 2-2
 }
 
@@ -252,6 +255,10 @@ function renderPanel() {
   document.getElementById("vCC").textContent =
     (lastCcNum === null) ? "—" : ("CC" + lastCcNum + " = " + lastCcVal);
   document.getElementById("vNote").textContent = lastNoteName;
+  var ks = Object.keys(seenMidi).map(Number).sort(function (a, b) { return a - b; });
+  document.getElementById("vSeen").textContent = ks.length
+    ? ks.map(function (m) { return Tone.Frequency(m, "midi").toNote() + "×" + seenMidi[m]; }).join("  ")
+    : "—";
   document.getElementById("vRate").textContent = rateWindow.length + " 件/秒";
 }
 
