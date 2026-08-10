@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>音だけの検査（Bluetooth不要）</title>
+<style>
+  body { margin:0; padding:16px 14px 60px; background:#14161a; color:#e8e8e8;
+         font-family:-apple-system,"Hiragino Kaku Gothic ProN",sans-serif; font-size:15px; line-height:1.6; }
+  h1 { font-size:17px; margin:0 0 4px; }
+  p.note { font-size:13px; color:#9aa0a6; margin:0 0 16px; }
+  button { display:block; width:100%; min-height:64px; margin:10px 0; padding:12px;
+           font-size:16px; font-family:inherit; color:#e8e8e8;
+           background:#263040; border:1px solid #3a4048; border-radius:10px;
+           -webkit-tap-highlight-color:transparent; }
+  button:active { background:#34425a; }
+  .out { padding:10px 12px; margin:6px 0 18px; border-radius:8px; background:#0f1114;
+         font-size:13px; word-break:break-all; min-height:2.6em; }
+  .ok { color:#8fe0a8; } .ng { color:#ff9d9d; }
+  h2 { font-size:14px; margin:22px 0 4px; color:#9aa0a6; font-weight:normal; }
+</style>
+</head>
+<body>
+
+<h1>音だけの検査</h1>
+<p class="note">Bluetoothも植物も使いません。ボタンを押して<b>音が聞こえるか</b>だけを見ます。<br>
+上から順に押してください。各ボタンは0.5秒の「ラ」の音を鳴らします。</p>
+
+<h2>検査1　素のWeb Audio（Tone.jsを使わない）</h2>
+<button id="b1">1. 素のWeb Audioで鳴らす</button>
+<div class="out" id="o1">まだ押していない</div>
+
+<h2>検査2　Tone.js を読み込む</h2>
+<button id="b2">2. Tone.js を読み込む</button>
+<div class="out" id="o2">まだ押していない</div>
+
+<h2>検査3　Tone.js で鳴らす（index.htmlと同じ経路）</h2>
+<button id="b3">3. Tone.js で鳴らす</button>
+<div class="out" id="o3">まだ押していない</div>
+
+<h2>検査4　Tone.js で鳴らす（音量の上限装置を通さない）</h2>
+<button id="b4">4. 上限装置なしで鳴らす</button>
+<div class="out" id="o4">まだ押していない</div>
+
+<script>
+"use strict";
+
+function show(id, text, ok) {
+  var el = document.getElementById(id);
+  el.textContent = text;
+  el.className = "out " + (ok === true ? "ok" : (ok === false ? "ng" : ""));
+}
+function errText(e) {
+  return (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : String(e));
+}
+window.addEventListener("error", function (ev) {
+  show("o2", "読み込みエラー: " + (ev.message || "不明"), false);
+});
+
+/* ---------- 検査1: 素のWeb Audio ---------- */
+var rawCtx = null;
+document.getElementById("b1").addEventListener("click", function () {
+  try {
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) { show("o1", "この環境に AudioContext がありません", false); return; }
+    if (!rawCtx) rawCtx = new Ctx();
+    rawCtx.resume();
+    var o = rawCtx.createOscillator();
+    var g = rawCtx.createGain();
+    o.type = "sine";
+    o.frequency.value = 440;
+    g.gain.value = 0.25;
+    o.connect(g);
+    g.connect(rawCtx.destination);
+    o.start();
+    o.stop(rawCtx.currentTime + 0.5);
+    setTimeout(function () {
+      show("o1", "鳴らした / 状態=" + rawCtx.state + " / サンプリング=" + rawCtx.sampleRate + "Hz", true);
+    }, 120);
+  } catch (e) {
+    show("o1", errText(e), false);
+  }
+});
+
+/* ---------- 検査2: Tone.js の読み込み ---------- */
+var toneLoaded = false;
+document.getElementById("b2").addEventListener("click", function () {
+  if (toneLoaded) { show("o2", "読み込み済み / 版 " + Tone.version, true); return; }
+  show("o2", "読み込んでいます…");
+  var s = document.createElement("script");
+  s.src = "https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js";
+  s.onload = function () {
+    toneLoaded = true;
+    show("o2", "読み込めた / 版 " + Tone.version, true);
+  };
+  s.onerror = function () {
+    show("o2", "読み込めなかった（回線かCDNの問題）", false);
+  };
+  document.head.appendChild(s);
+});
+
+/* ---------- 検査3・4: Tone.js で鳴らす ---------- */
+var synth3 = null, limiter3 = null, synth4 = null;
+
+function toneReady(outId) {
+  if (typeof Tone === "undefined") {
+    show(outId, "先に検査2（Tone.jsを読み込む）を押してください", false);
+    return false;
+  }
+  return true;
+}
+
+document.getElementById("b3").addEventListener("click", function () {
+  if (!toneReady("o3")) return;
+  Tone.start().then(function () {
+    if (!synth3) {
+      limiter3 = new Tone.Limiter(-6).toDestination();
+      synth3 = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: "triangle" },
+        envelope: { attack: 0.02, decay: 0.25, sustain: 0.25, release: 1.2 }
+      });
+      synth3.volume.value = -10;
+      synth3.connect(limiter3);
+    }
+    synth3.triggerAttackRelease(440, "8n");
+    show("o3", "鳴らした / 状態=" + Tone.context.state +
+                " / 出口の音量=" + Tone.getDestination().volume.value + "dB" +
+                " / 消音=" + Tone.getDestination().mute, true);
+  }).catch(function (e) {
+    show("o3", errText(e), false);
+  });
+});
+
+document.getElementById("b4").addEventListener("click", function () {
+  if (!toneReady("o4")) return;
+  Tone.start().then(function () {
+    if (!synth4) {
+      synth4 = new Tone.Synth().toDestination();
+    }
+    synth4.triggerAttackRelease(440, "8n");
+    show("o4", "鳴らした / 状態=" + Tone.context.state);
+  }).catch(function (e) {
+    show("o4", errText(e), false);
+  });
+});
+</script>
+</body>
+</html>
