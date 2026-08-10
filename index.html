@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>PlantWave BLE-MIDI spike</title>
+</head>
+<body>
+<button id="connect">Connect PlantWave</button>
+<pre id="log"></pre>
+<script>
+const BLE_MIDI_SERVICE = "03b80e5a-ede8-4b33-a751-6ce34ec4c700";
+const BLE_MIDI_CHAR = "7772e5db-3868-4112-a1a9-f2669d106bf3";
+const logEl = document.getElementById("log");
+
+function log(text, isError) {
+  const ts = new Date().toISOString();
+  const line = document.createElement("div");
+  if (isError) line.style.color = "red";
+  line.textContent = `[${ts}] ${text}`;
+  logEl.appendChild(line);
+}
+
+function toHex(dataView) {
+  const bytes = [];
+  for (let i = 0; i < dataView.byteLength; i++) {
+    bytes.push(dataView.getUint8(i).toString(16).padStart(2, "0"));
+  }
+  return bytes.join(" ");
+}
+
+document.getElementById("connect").addEventListener("click", async () => {
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [BLE_MIDI_SERVICE]
+    });
+    log(`Device selected: ${device.name || "(no name)"}`);
+
+    const server = await device.gatt.connect();
+    log("GATT connected");
+
+    const service = await server.getPrimaryService(BLE_MIDI_SERVICE);
+    const characteristic = await service.getCharacteristic(BLE_MIDI_CHAR);
+
+    await characteristic.startNotifications();
+    log("Notifications started");
+
+    characteristic.addEventListener("characteristicvaluechanged", (event) => {
+      log(toHex(event.target.value));
+    });
+  } catch (err) {
+    log(String(err), true);
+  }
+});
+</script>
+</body>
+</html>
