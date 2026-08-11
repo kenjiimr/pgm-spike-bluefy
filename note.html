@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PGM 素材ページ — 装置の出力をそのまま鳴らす</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; padding:12px 12px 64px; background:#14161a; color:#e8e8e8;
+         font-family:-apple-system,"Hiragino Kaku Gothic ProN",sans-serif;
+         font-size:15px; line-height:1.5; }
+  h1 { font-size:17px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:20px 0 6px; padding-bottom:4px; border-bottom:1px solid #333; }
+  .note { font-size:13px; color:#9aa0a6; margin:0 0 12px; }
+  .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap; }
+  button { flex:1 1 auto; min-height:48px; padding:10px 14px; font-size:15px;
+           font-family:inherit; border:1px solid #3a4048; border-radius:8px;
+           background:#263040; color:#e8e8e8; -webkit-tap-highlight-color:transparent; }
+  button:active { background:#34425a; }
+  button.sub { background:#1c2026; color:#9aa0a6; flex:0 1 auto; min-height:40px; font-size:13px; }
+  button:disabled { opacity:0.4; }
+  #btnStart { width:100%; min-height:72px; font-size:17px; font-weight:bold; background:#2f5d3a; }
+  #btnPhase { width:100%; min-height:64px; font-size:16px; font-weight:bold; }
+  #btnPhase.touching { background:#2f5d3a; border-color:#4a8a5c; }
+  #btnPhase.away { background:#2a3038; border-color:#444c56; }
+  .status { padding:8px 10px; border-radius:6px; background:#1c2026; font-size:13px; margin:8px 0; }
+  .big { display:flex; gap:8px; margin:8px 0; }
+  .big div { flex:1; background:#1c2026; border-radius:6px; padding:8px 10px; text-align:center; }
+  .big b { display:block; font-size:26px; font-variant-numeric:tabular-nums; line-height:1.2; }
+  .big span { font-size:11px; color:#9aa0a6; }
+  table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
+  th,td { padding:5px 4px; border-bottom:1px solid #2a2e35; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:#9aa0a6; font-weight:normal; }
+  .empty { color:#6b7280; font-size:13px; padding:6px 0; }
+  pre { margin:0; padding:8px; background:#0f1114; border-radius:6px;
+        font-size:11px; line-height:1.45; overflow-x:auto; white-space:pre; }
+  #errs .err { padding:6px 8px; margin-bottom:4px; border-radius:6px;
+               background:#3a1e1e; color:#ffbdbd; font-size:12px; word-break:break-all; }
+  #copyArea { width:100%; height:140px; display:none; margin-top:8px; background:#0f1114;
+              color:#e8e8e8; border:1px solid #3a4048; border-radius:6px; font-size:11px; padding:6px; }
+  #copyState { font-size:12px; color:#9aa0a6; min-height:16px; }
+</style>
+</head>
+<body>
+
+<h1>PGM 素材ページ（段階1）</h1>
+<p class="note">
+  装置が出した <b>音の高さ・長さ・強さ・重なり</b> をそのまま鳴らします。<br>
+  音階への丸め直しをしません（丸めは装置の中で済んでいます）。CC80は表示だけで音にしません。<br>
+  <b>音が出ないときは、まずiPhoneの消音モードを確認してください。</b>
+</p>
+
+<button id="btnStart">はじまる</button>
+<div id="conn" class="status">未接続</div>
+
+<div class="big">
+  <div><b id="nowVoices">0</b><span>いま鳴っている</span></div>
+  <div><b id="maxVoices">0</b><span>同時の最大</span></div>
+  <div><b id="ccNow">—</b><span>CC80の値</span></div>
+</div>
+
+<button id="btnPhase" class="away">いま: 離している<br><span style="font-size:12px;font-weight:normal">タップで「触れている」に切り替わります</span></button>
+
+<div class="row">
+  <button id="btnReset" class="sub">集計をリセット</button>
+  <button id="btnCopy">結果をコピー</button>
+</div>
+<div id="copyState"></div>
+<textarea id="copyArea" readonly></textarea>
+
+<h2>音の高さ（区間ごと）</h2>
+<div id="pitchWrap"></div>
+
+<h2>音の長さ（Note On から Off までの実測）</h2>
+<div id="durWrap"></div>
+
+<h2>受信の内訳</h2>
+<div id="statWrap"></div>
+
+<h2>エラー（原文）</h2>
+<div id="errs"><div class="empty">なし</div></div>
+
+<h2>生ログ（直近60件・新しいものが上）</h2>
+<pre id="log">（未受信）</pre>
+
+<script>
+"use strict";
+
+/* ==================================================================
+   定数
+================================================================== */
+var MIDI_SERVICE = "03b80e5a-ede8-4b33-a751-6ce34ec4c700";
+var MIDI_CHAR    = "7772e5db-3868-4112-a1a9-f2669d106bf3";
+
+var VOICE_COUNT = 16;      // 装置のPolyphony上限8に対し余裕を持たせる
+var VOICE_DB    = -10;     // 1声あたりの音量（暫定）
+var LIMITER_DB  = -6;      // 出口の頭打ち（暫定）
+var LOG_MAX     = 60;
+
+/* ==================================================================
+   状態
+================================================================== */
+var device = null, characteristic = null;
+var limiter = null, voices = [], audioReady = false;
+
+var startedAt = null;
+var total = 0, ccCount = 0, ccLast = null, ccMin = 999, ccMax = -1;
+var onCount = 0, offCount = 0, orphanOff = 0, stolen = 0;
+var maxVoices = 0;
+var durs = [];                 // 実測した持続時間(ms)
+var pitchAll = {}, pitchTouch = {}, pitchAway = {};
+var phase = "離";
+var log = [], errors = [];
+
+/* ==================================================================
+   エラーは握りつぶさない
+================================================================== */
+function pushError(where, e) {
+  var text = (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : String(e));
+  errors.unshift({ t: new Date(), where: where, text: text });
+  if (errors.length > 20) errors.pop();
+  renderErrors();
+}
+window.addEventListener("error", function (ev) {
+  pushError("window.onerror", ev.error || { name: "Error", message: ev.message });
+});
+window.addEventListener("unhandledrejection", function (ev) {
+  pushError("unhandledrejection", ev.reason);
+});
+
+/* ==================================================================
+   音 — 独立した音源を16個持つ
+   PolySynthを使わない理由: 同じ音高を重ねたとき、どの声部が止まるかが
+   保証されない。装置は同じ音を最大3声重ねてくるため、対応を自分で持つ
+================================================================== */
+function buildAudio() {
+  limiter = new Tone.Limiter(LIMITER_DB).toDestination();
+  for (var i = 0; i < VOICE_COUNT; i++) {
+    var s = new Tone.Synth({
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.02, decay: 0.25, sustain: 0.25, release: 1.2 }
+    });
+    s.volume.value = VOICE_DB;
+    s.connect(limiter);
+    voices.push({ synth: s, midi: null, at: 0, busy: false });
+  }
+  audioReady = true;
+}
+
+function busyCount() {
+  var n = 0;
+  for (var i = 0; i < voices.length; i++) if (voices[i].busy) n++;
+  return n;
+}
+
+function midiToFreq(m) { return Tone.Frequency(m, "midi").toFrequency(); }
+function midiToName(m) { return Tone.Frequency(m, "midi").toNote(); }
+
+/* 空いている声部を取る。全部埋まっていたら最も古いものを奪う */
+function takeVoice() {
+  var i;
+  for (i = 0; i < voices.length; i++) if (!voices[i].busy) return voices[i];
+  var oldest = null;
+  for (i = 0; i < voices.length; i++) {
+    if (!oldest || voices[i].at < oldest.at) oldest = voices[i];
+  }
+  try { oldest.synth.triggerRelease(); } catch (e) { pushError("steal", e); }
+  oldest.busy = false;
+  stolen++;
+  return oldest;
+}
+
+function noteOn(midi, vel) {
+  if (!audioReady) return;
+  var v = takeVoice();
+  try {
+    v.synth.triggerAttack(midiToFreq(midi), undefined, vel / 127);
+  } catch (e) {
+    pushError("noteOn", e);
+    return;
+  }
+  v.midi = midi; v.at = Date.now(); v.busy = true;
+  var n = busyCount();
+  if (n > maxVoices) maxVoices = n;
+}
+
+/* 同じ音高のうち、いちばん古い声部を止める（先に鳴り始めた音から順に） */
+function noteOff(midi) {
+  if (!audioReady) return;
+  var target = null;
+  for (var i = 0; i < voices.length; i++) {
+    var v = voices[i];
+    if (v.busy && v.midi === midi) {
+      if (!target || v.at < target.at) target = v;
+    }
+  }
+  if (!target) { orphanOff++; return; }
+  try { target.synth.triggerRelease(); } catch (e) { pushError("noteOff", e); }
+  durs.push(Date.now() - target.at);
+  if (durs.length > 2000) durs.shift();
+  target.busy = false; target.midi = null;
+}
+
+function stopAll() {
+  for (var i = 0; i < voices.length; i++) {
+    if (voices[i].busy) {
+      try { voices[i].synth.triggerRelease(); } catch (e) { pushError("stopAll", e); }
+      voices[i].busy = false; voices[i].midi = null;
+    }
+  }
+}
+
+/* ==================================================================
+   接続 — 最初から「全機器から選ぶ」
+   絞り込むと一覧に出ない（PlantWaveはBLEの広告にMIDIの番号を載せていない）
+================================================================== */
+function setConn(t) { document.getElementById("conn").textContent = t; }
+
+function connect() {
+  if (!navigator.bluetooth) {
+    pushError("connect", { name: "NotSupported",
+      message: "このブラウザには navigator.bluetooth がありません（iOSではBluefy等が要ります）" });
+    return;
+  }
+  setConn("機器を選んでいます…");
+  navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [MIDI_SERVICE] })
+    .then(function (d) {
+      device = d;
+      setConn("接続中… (" + (d.name || "名前なし") + ")");
+      d.addEventListener("gattserverdisconnected", onDisconnected);
+      return d.gatt.connect();
+    })
+    .then(function (server) { return server.getPrimaryService(MIDI_SERVICE); })
+    .then(function (service) { return service.getCharacteristic(MIDI_CHAR); })
+    .then(function (ch) {
+      characteristic = ch;
+      ch.addEventListener("characteristicvaluechanged", onValue);
+      return ch.startNotifications();
+    })
+    .then(function () {
+      setConn("接続済み: " + (device && device.name ? device.name : "名前なし") + "　植物に触れてください");
+      resetStats();
+    })
+    .catch(function (e) {
+      setConn("接続できませんでした（下のエラー欄を見てください）");
+      pushError("connect", e);
+    });
+}
+
+function onDisconnected() {
+  setConn("切断されました。「はじまる」をもう一度押してください");
+  characteristic = null;
+  stopAll();
+}
+
+/* ==================================================================
+   BLE-MIDI のバイト列を分解する
+   形: [ヘッダ][時刻][ステータス][データ…] [時刻][…] …
+   ランニングステータス（ステータス省略）に対応する
+================================================================== */
+function parseBleMidi(b) {
+  var out = [];
+  if (!b || b.length < 3) return out;
+  var i = 1, running = 0;
+  while (i < b.length) {
+    if (b[i] & 0x80) { i++; if (i >= b.length) break; }
+    var status;
+    if (b[i] & 0x80) {
+      status = b[i]; i++;
+      if (status >= 0xF8) { out.push({ status: status, d1: null, d2: null }); continue; }
+      running = (status < 0xF0) ? status : 0;
+    } else {
+      status = running;
+      if (!status) { i++; continue; }
+    }
+    var need;
+    if (status === 0xF0) {
+      while (i < b.length && b[i] !== 0xF7) i++;
+      i++;
+      out.push({ status: 0xF0, d1: null, d2: null });
+      continue;
+    } else if (status >= 0xF0) {
+      need = (status === 0xF1 || status === 0xF3) ? 1 : (status === 0xF2 ? 2 : 0);
+    } else {
+      var t = status & 0xF0;
+      need = (t === 0xC0 || t === 0xD0) ? 1 : 2;
+    }
+    if (i + need > b.length) break;
+    var d1 = need >= 1 ? b[i++] : null;
+    var d2 = need >= 2 ? b[i++] : null;
+    out.push({ status: status, d1: d1, d2: d2 });
+  }
+  return out;
+}
+
+/* ==================================================================
+   受信
+================================================================== */
+function onValue(ev) {
+  try {
+    var dv = ev.target.value;
+    var bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    var msgs = parseBleMidi(bytes);
+    var now = Date.now();
+    if (startedAt === null) resetStats();
+    for (var k = 0; k < msgs.length; k++) handle(msgs[k], now);
+  } catch (e) {
+    pushError("onValue", e);
+  }
+}
+
+function handle(m, now) {
+  total++;
+  var st = m.status, type = st & 0xF0, line;
+
+  if (st < 0xF0 && type === 0x90 && m.d2 > 0) {
+    onCount++;
+    pitchAll[m.d1] = (pitchAll[m.d1] || 0) + 1;
+    var box = (phase === "触") ? pitchTouch : pitchAway;
+    box[m.d1] = (box[m.d1] || 0) + 1;
+    noteOn(m.d1, m.d2);
+    line = "On   " + midiToName(m.d1) + " (note " + pad(m.d1, 3) + ")  vel " + pad(m.d2, 3);
+
+  } else if (st < 0xF0 && (type === 0x80 || (type === 0x90 && m.d2 === 0))) {
+    offCount++;
+    noteOff(m.d1);
+    line = "Off  " + midiToName(m.d1) + " (note " + pad(m.d1, 3) + ")";
+
+  } else if (st < 0xF0 && type === 0xB0) {
+    ccCount++; ccLast = m.d2;
+    if (m.d2 < ccMin) ccMin = m.d2;
+    if (m.d2 > ccMax) ccMax = m.d2;
+    line = "CC   " + pad(m.d1, 3) + " 値 " + pad(m.d2, 3) + "（音にしません）";
+
+  } else {
+    line = "その他 status 0x" + st.toString(16);
+  }
+
+  log.unshift(hhmmss(now) + " [" + phase + "] " + line);
+  if (log.length > LOG_MAX) log.length = LOG_MAX;
+}
+
+/* ==================================================================
+   集計・表示
+================================================================== */
+function resetStats() {
+  startedAt = Date.now();
+  total = 0; ccCount = 0; ccLast = null; ccMin = 999; ccMax = -1;
+  onCount = 0; offCount = 0; orphanOff = 0; stolen = 0;
+  maxVoices = 0; durs = [];
+  pitchAll = {}; pitchTouch = {}; pitchAway = {};
+  log = [];
+  render();
+}
+
+function togglePhase() {
+  phase = (phase === "触") ? "離" : "触";
+  var b = document.getElementById("btnPhase");
+  if (phase === "触") {
+    b.className = "touching";
+    b.innerHTML = 'いま: <b>触れている</b><br><span style="font-size:12px;font-weight:normal">タップで「離している」に切り替わります</span>';
+  } else {
+    b.className = "away";
+    b.innerHTML = 'いま: 離している<br><span style="font-size:12px;font-weight:normal">タップで「触れている」に切り替わります</span>';
+  }
+}
+
+function pad(n, w) { var s = String(n); while (s.length < w) s = " " + s; return s; }
+function hhmmss(t) {
+  var d = new Date(t);
+  function z(n, w) { var s = String(n); while (s.length < w) s = "0" + s; return s; }
+  return z(d.getHours(),2)+":"+z(d.getMinutes(),2)+":"+z(d.getSeconds(),2)+"."+z(d.getMilliseconds(),3);
+}
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function elapsed(){ return startedAt===null ? 0 : Math.max(0.001,(Date.now()-startedAt)/1000); }
+
+function durStats() {
+  if (!durs.length) return null;
+  var mn = Infinity, mx = -1, sum = 0;
+  for (var i = 0; i < durs.length; i++) {
+    if (durs[i] < mn) mn = durs[i];
+    if (durs[i] > mx) mx = durs[i];
+    sum += durs[i];
+  }
+  return { n: durs.length, min: mn, max: mx, avg: Math.round(sum / durs.length) };
+}
+
+function render() {
+  document.getElementById("nowVoices").textContent = busyCount();
+  document.getElementById("maxVoices").textContent = maxVoices;
+  document.getElementById("ccNow").textContent = (ccLast === null ? "—" : ccLast);
+
+  // 音の高さ（区間ごと）
+  var keys = Object.keys(pitchAll).map(Number).sort(function(a,b){return a-b;});
+  var h;
+  if (!keys.length) { h = '<div class="empty">まだ届いていません</div>'; }
+  else {
+    h = '<table><tr><th>音名</th><th>番号</th><th>全体</th><th>触れている</th><th>離している</th></tr>';
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      h += "<tr><td>" + midiToName(k) + "</td><td>" + k + "</td><td>" + pitchAll[k] +
+           "</td><td>" + (pitchTouch[k] || 0) + "</td><td>" + (pitchAway[k] || 0) + "</td></tr>";
+    }
+    h += "</table>";
+    h += '<div class="empty">種類 ' + keys.length + " 種／最小 " + keys[0] +
+         "／最大 " + keys[keys.length-1] + "</div>";
+  }
+  document.getElementById("pitchWrap").innerHTML = h;
+
+  // 音の長さ
+  var d = durStats();
+  document.getElementById("durWrap").innerHTML = d
+    ? '<table><tr><th>件数</th><th>最短</th><th>最長</th><th>平均</th></tr><tr><td>' +
+      d.n + "</td><td>" + d.min + " ms</td><td>" + d.max + " ms</td><td>" + d.avg + " ms</td></tr></table>"
+    : '<div class="empty">まだ測れていません</div>';
+
+  // 受信の内訳
+  document.getElementById("statWrap").innerHTML =
+    '<table><tr><th>項目</th><th>値</th></tr>' +
+    "<tr><td>Note On</td><td>" + onCount + " 件</td></tr>" +
+    "<tr><td>Note Off</td><td>" + offCount + " 件</td></tr>" +
+    "<tr><td>対応するOnが無かったOff</td><td>" + orphanOff + " 件</td></tr>" +
+    "<tr><td>声部が足りず奪った回数</td><td>" + stolen + " 件</td></tr>" +
+    "<tr><td>CC</td><td>" + ccCount + " 件（範囲 " +
+      (ccMin===999?"—":ccMin) + "〜" + (ccMax===-1?"—":ccMax) + "）</td></tr>" +
+    "<tr><td>総メッセージ</td><td>" + total + " 件</td></tr>" +
+    "<tr><td>計測</td><td>" + elapsed().toFixed(1) + " 秒</td></tr></table>";
+
+  document.getElementById("log").textContent = log.length ? log.join("\n") : "（未受信）";
+}
+
+function renderErrors() {
+  var el = document.getElementById("errs");
+  if (!errors.length) { el.innerHTML = '<div class="empty">なし</div>'; return; }
+  var h = "";
+  for (var i = 0; i < errors.length; i++) {
+    h += '<div class="err">' + hhmmss(errors[i].t.getTime()) + " [" + esc(errors[i].where) + "] " +
+         esc(errors[i].text) + "</div>";
+  }
+  el.innerHTML = h;
+}
+
+/* ==================================================================
+   結果のコピー
+================================================================== */
+function buildReport() {
+  var L = [];
+  L.push("# PGM 素材ページ 結果  " + new Date().toString());
+  L.push("計測 " + elapsed().toFixed(1) + " 秒 / 総メッセージ " + total + " 件 / 機器 " +
+         (device && device.name ? device.name : "不明"));
+  L.push("");
+  L.push("## 音の高さ");
+  var keys = Object.keys(pitchAll).map(Number).sort(function(a,b){return a-b;});
+  L.push("音名\t番号\t全体\t触れている\t離している");
+  if (!keys.length) L.push("（受信なし）");
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    L.push(midiToName(k) + "\t" + k + "\t" + pitchAll[k] + "\t" +
+           (pitchTouch[k]||0) + "\t" + (pitchAway[k]||0));
+  }
+  if (keys.length) L.push("種類 " + keys.length + " 種 / 最小 " + keys[0] + " / 最大 " + keys[keys.length-1]);
+  L.push("");
+  L.push("## 音の長さ（Note On から Off までの実測）");
+  var d = durStats();
+  L.push(d ? ("件数 " + d.n + " / 最短 " + d.min + "ms / 最長 " + d.max + "ms / 平均 " + d.avg + "ms")
+           : "（測定なし）");
+  L.push("");
+  L.push("## 受信の内訳");
+  L.push("Note On " + onCount + " / Note Off " + offCount +
+         " / 対応するOnが無かったOff " + orphanOff + " / 声部を奪った回数 " + stolen);
+  L.push("同時発音の最大 " + maxVoices);
+  L.push("CC " + ccCount + " 件（範囲 " + (ccMin===999?"—":ccMin) + "〜" + (ccMax===-1?"—":ccMax) + "）");
+  L.push("");
+  L.push("## エラー");
+  if (!errors.length) L.push("なし");
+  for (var e = 0; e < errors.length; e++) {
+    L.push(hhmmss(errors[e].t.getTime()) + " [" + errors[e].where + "] " + errors[e].text);
+  }
+  L.push("");
+  L.push("## 生ログ（直近" + LOG_MAX + "件・新しいものが上）");
+  L.push(log.length ? log.join("\n") : "（未受信）");
+  return L.join("\n");
+}
+
+function copyReport() {
+  var text = buildReport();
+  var st = document.getElementById("copyState");
+  var ta = document.getElementById("copyArea");
+  ta.value = text;
+  function fallback(msg) {
+    ta.style.display = "block"; ta.focus(); ta.select();
+    st.textContent = msg + " 下の枠の文字を長押しで選んでコピーしてください。";
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () {
+      ta.style.display = "none";
+      st.textContent = "コピーしました（" + text.length + "文字）。チャットへ貼ってください。";
+    }).catch(function (e) { pushError("copy", e); fallback("自動コピーができませんでした。"); });
+  } else {
+    fallback("このブラウザは自動コピーに対応していません。");
+  }
+}
+
+/* ==================================================================
+   起動 — このタップが音の許可を兼ねる
+================================================================== */
+document.getElementById("btnStart").addEventListener("click", function () {
+  if (typeof Tone === "undefined") {
+    pushError("start", { name: "ToneNotLoaded",
+      message: "Tone.js を読み込めていません（回線かCDNを確認してください）" });
+    return;
+  }
+  Tone.start().then(function () {
+    if (!audioReady) buildAudio();
+    document.getElementById("btnStart").style.display = "none";
+    connect();
+  }).catch(function (e) { pushError("Tone.start", e); });
+});
+document.getElementById("btnPhase").addEventListener("click", togglePhase);
+document.getElementById("btnCopy").addEventListener("click", copyReport);
+document.getElementById("btnReset").addEventListener("click", function () {
+  errors = []; renderErrors(); resetStats();
+});
+
+resetStats();
+setInterval(render, 150);
+</script>
+</body>
+</html>
