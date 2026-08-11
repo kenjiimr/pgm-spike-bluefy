@@ -48,8 +48,7 @@
 <h1>PGM 素材ページ（段階1）</h1>
 <p class="note">
   装置が出した <b>音の高さ・長さ・強さ・重なり</b> をそのまま鳴らします。<br>
-  音階への丸め直しをしません（丸めは装置の中で済んでいます）。CC80は表示だけで音にしません。<br>
-  時刻も<b>装置が刻んだもの</b>を使います。<br>
+  音階への丸め直しをしません。CC80は表示だけで音にしません。<br>
   <b>音が出ないときは、まずiPhoneの消音モードを確認してください。</b>
 </p>
 
@@ -74,15 +73,18 @@
 <h2>音の高さ（区間ごと）</h2>
 <div id="pitchWrap"></div>
 
-<h2>音の長さ（装置の時刻で実測）</h2>
+<h2>音の長さ</h2>
 <div id="durWrap"></div>
 
-<h2>音の長さの分布</h2>
+<h2>装置の時刻が使えるかの診断</h2>
+<div id="diagWrap"></div>
+
+<h2>音の長さの分布（受信の時刻）</h2>
 <div id="histWrap"></div>
 
-<h2>式の検証 — 予測と実測</h2>
+<h2>式の検証 — 予測と実測（受信の時刻）</h2>
 <p class="note" style="margin:0 0 6px">
-  予測 ＝ 音が鳴り始めた時点のCC値から <code>250 + (CC−1)×19.05</code> ms で計算した値。
+  予測 ＝ 鳴り始めた時点のCC値から <code>250 + (CC−1)×19.05</code> ms で計算した値。
 </p>
 <div id="predWrap"></div>
 
@@ -109,13 +111,11 @@ var VOICE_DB    = -10;
 var LIMITER_DB  = -6;
 var LOG_MAX     = 60;
 
-/* 装置の時刻カウンタは13ビット＝0〜8191ms で一周する */
-var TS_WRAP     = 8192;
-var TS_RESYNC   = 4000;    // これ以上途切れたら基準を取り直す
+var TS_WRAP     = 8192;    // 装置の時刻カウンタは13ビット
+var TS_RESYNC   = 4000;
 
-/* 前身機のソースにあった音の長さの式（検証対象の仮説） */
-var DUR_BASE  = 250;              // 150 + 100
-var DUR_SLOPE = 2400 / 126;       // ≒ 19.05 ms / CC1段
+var DUR_BASE  = 250;
+var DUR_SLOPE = 2400 / 126;
 
 /* ==================================================================
    状態
@@ -127,13 +127,14 @@ var startedAt = null;
 var total = 0, ccCount = 0, ccLast = null, ccMin = 999, ccMax = -1;
 var onCount = 0, offCount = 0, orphanOff = 0, stolen = 0;
 var maxVoices = 0;
-var durs = [];                 // {ms, cc, pred}
+var durs = [];                 // {msRecv, msDev, cc, pred}
 var pitchAll = {}, pitchTouch = {}, pitchAway = {};
 var phase = "離";
 var log = [], errors = [];
 
-/* 装置時刻を単調増加のミリ秒へ直すための状態 */
+/* 装置時刻の診断用 */
 var tsPrev13 = null, devClock = 0, lastRecvAt = 0, resyncCount = 0;
+var tsSeen = {}, tsFirst = null, tsLast = null, tsChanges = 0;
 
 /* ==================================================================
    エラーは握りつぶさない
@@ -152,13 +153,10 @@ window.addEventListener("unhandledrejection", function (ev) {
 });
 
 /* ==================================================================
-   装置時刻 → 単調増加のミリ秒
-   カウンタは8192msで一周するため、そのままでは差が取れない。
-   ・前回より小さくなったら一周したとみなす
-   ・受信が4秒以上途切れたら、何周したか分からないので基準を取り直す
+   装置時刻 → 単調増加のミリ秒（診断用。判定には使わない）
 ================================================================== */
 function devTime(ts13, recvAt) {
-  if (ts13 === null) ts13 = tsPrev13;                 // 時刻が省略された場合は直前を引き継ぐ
+  if (ts13 === null) ts13 = tsPrev13;
   if (tsPrev13 === null || ts13 === null || (recvAt - lastRecvAt) > TS_RESYNC) {
     if (tsPrev13 !== null) resyncCount++;
     tsPrev13 = (ts13 === null) ? 0 : ts13;
@@ -167,18 +165,25 @@ function devTime(ts13, recvAt) {
     return devClock;
   }
   var d = ts13 - tsPrev13;
-  if (d < 0) d += TS_WRAP;                            // 一周した
-  if (d > TS_WRAP - 200) d = 0;                       // 異常値の保護
+  if (d < 0) d += TS_WRAP;
+  if (d > TS_WRAP - 200) d = 0;
   devClock += d;
   tsPrev13 = ts13;
   lastRecvAt = recvAt;
   return devClock;
 }
 
+/* 装置が時刻を更新しているかを数える */
+function noteTs(ts13) {
+  if (ts13 === null) return;
+  if (tsFirst === null) tsFirst = ts13;
+  if (tsLast !== null && ts13 !== tsLast) tsChanges++;
+  tsLast = ts13;
+  tsSeen[ts13] = (tsSeen[ts13] || 0) + 1;
+}
+
 /* ==================================================================
    音 — 独立した音源を16個持つ
-   PolySynthを使わない理由: 同じ音高を重ねたとき、どの声部が止まるかが
-   保証されない。装置は同じ音を重ねてくるため、対応を自分で持つ
 ================================================================== */
 function buildAudio() {
   limiter = new Tone.Limiter(LIMITER_DB).toDestination();
@@ -189,7 +194,7 @@ function buildAudio() {
     });
     s.volume.value = VOICE_DB;
     s.connect(limiter);
-    voices.push({ synth: s, midi: null, at: 0, cc: null, busy: false });
+    voices.push({ synth: s, midi: null, at: 0, atDev: 0, cc: null, busy: false });
   }
   audioReady = true;
 }
@@ -216,7 +221,7 @@ function takeVoice() {
   return oldest;
 }
 
-function noteOn(midi, vel, devAt) {
+function noteOn(midi, vel, recvAt, devAt) {
   if (!audioReady) return;
   var v = takeVoice();
   try {
@@ -225,13 +230,13 @@ function noteOn(midi, vel, devAt) {
     pushError("noteOn", e);
     return;
   }
-  v.midi = midi; v.at = devAt; v.cc = ccLast; v.busy = true;
+  v.midi = midi; v.at = recvAt; v.atDev = devAt; v.cc = ccLast; v.busy = true;
   var n = busyCount();
   if (n > maxVoices) maxVoices = n;
 }
 
-/* 同じ音高のうち、いちばん古い声部を止める（先に鳴り始めた音から順に） */
-function noteOff(midi, devAt) {
+/* 同じ音高のうち、いちばん古い声部を止める */
+function noteOff(midi, recvAt, devAt) {
   if (!audioReady) return;
   var target = null;
   for (var i = 0; i < voices.length; i++) {
@@ -242,11 +247,12 @@ function noteOff(midi, devAt) {
   }
   if (!target) { orphanOff++; return; }
   try { target.synth.triggerRelease(); } catch (e) { pushError("noteOff", e); }
-  var ms = devAt - target.at;
+  var ms = recvAt - target.at;
   if (ms >= 0 && ms < 30000) {
     var cc = target.cc;
     durs.push({
-      ms: ms,
+      msRecv: ms,
+      msDev: devAt - target.atDev,
       cc: cc,
       pred: (cc === null) ? null : Math.round(DUR_BASE + (Math.max(1, cc) - 1) * DUR_SLOPE)
     });
@@ -265,8 +271,7 @@ function stopAll() {
 }
 
 /* ==================================================================
-   接続 — 最初から「全機器から選ぶ」
-   絞り込むと一覧に出ない（PlantWaveはBLEの広告にMIDIの番号を載せていない）
+   接続
 ================================================================== */
 function setConn(t) { document.getElementById("conn").textContent = t; }
 
@@ -292,7 +297,7 @@ function connect() {
       return ch.startNotifications();
     })
     .then(function () {
-      setConn("接続済み: " + (device && device.name ? device.name : "名前なし") + "　植物に触れてください");
+      setConn("接続済み: " + (device && device.name ? device.name : "名前なし"));
       resetStats();
     })
     .catch(function (e) {
@@ -309,10 +314,6 @@ function onDisconnected() {
 
 /* ==================================================================
    BLE-MIDI のバイト列を分解する
-   形: [ヘッダ][時刻][ステータス][データ…] [時刻][…] …
-   ・ヘッダの下位6ビットが時刻の上位、時刻バイトの下位7ビットが時刻の下位
-   ・合わせて13ビット＝0〜8191ms
-   ・ランニングステータス（ステータス省略）に対応する
 ================================================================== */
 function parseBleMidi(b) {
   var out = [];
@@ -364,14 +365,15 @@ function onValue(ev) {
     var msgs = parseBleMidi(bytes);
     var recvAt = Date.now();
     if (startedAt === null) resetStats();
-    for (var k = 0; k < msgs.length; k++) handle(msgs[k], recvAt);
+    for (var k = 0; k < msgs.length; k++) handle(msgs[k], recvAt, bytes);
   } catch (e) {
     pushError("onValue", e);
   }
 }
 
-function handle(m, recvAt) {
+function handle(m, recvAt, rawBytes) {
   total++;
+  noteTs(m.ts);
   var devAt = devTime(m.ts, recvAt);
   var st = m.status, type = st & 0xF0, line;
 
@@ -380,25 +382,28 @@ function handle(m, recvAt) {
     pitchAll[m.d1] = (pitchAll[m.d1] || 0) + 1;
     var box = (phase === "触") ? pitchTouch : pitchAway;
     box[m.d1] = (box[m.d1] || 0) + 1;
-    noteOn(m.d1, m.d2, devAt);
+    noteOn(m.d1, m.d2, recvAt, devAt);
     line = "On   " + midiToName(m.d1) + " (note " + pad(m.d1, 3) + ")  vel " + pad(m.d2, 3);
 
   } else if (st < 0xF0 && (type === 0x80 || (type === 0x90 && m.d2 === 0))) {
     offCount++;
-    noteOff(m.d1, devAt);
+    noteOff(m.d1, recvAt, devAt);
     line = "Off  " + midiToName(m.d1) + " (note " + pad(m.d1, 3) + ")";
 
   } else if (st < 0xF0 && type === 0xB0) {
     ccCount++; ccLast = m.d2;
     if (m.d2 < ccMin) ccMin = m.d2;
     if (m.d2 > ccMax) ccMax = m.d2;
-    line = "CC   " + pad(m.d1, 3) + " 値 " + pad(m.d2, 3) + "（音にしません）";
+    line = "CC   " + pad(m.d1, 3) + " 値 " + pad(m.d2, 3);
 
   } else {
     line = "その他 status 0x" + st.toString(16);
   }
 
-  log.unshift(hhmmss(recvAt) + " [" + phase + "] 装置" + pad(devAt % 100000, 5) + "  " + line);
+  // 先頭バイトと時刻の生の値を残す（装置が時刻を更新しているかの診断用）
+  var head = rawBytes && rawBytes.length ? rawBytes[0].toString(16) : "--";
+  log.unshift(hhmmss(recvAt) + " [" + phase + "] ts=" + pad(m.ts === null ? -1 : m.ts, 4) +
+              " h=" + head + "  " + line);
   if (log.length > LOG_MAX) log.length = LOG_MAX;
 }
 
@@ -412,6 +417,7 @@ function resetStats() {
   maxVoices = 0; durs = [];
   pitchAll = {}; pitchTouch = {}; pitchAway = {};
   tsPrev13 = null; devClock = 0; lastRecvAt = 0; resyncCount = 0;
+  tsSeen = {}; tsFirst = null; tsLast = null; tsChanges = 0;
   log = [];
   render();
 }
@@ -437,11 +443,11 @@ function hhmmss(t) {
 function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 function elapsed(){ return startedAt===null ? 0 : Math.max(0.001,(Date.now()-startedAt)/1000); }
 
-function durStats() {
+function durStats(key) {
   if (!durs.length) return null;
   var mn = Infinity, mx = -1, sum = 0, under250 = 0;
   for (var i = 0; i < durs.length; i++) {
-    var v = durs[i].ms;
+    var v = durs[i][key];
     if (v < mn) mn = v;
     if (v > mx) mx = v;
     sum += v;
@@ -455,12 +461,11 @@ var HIST_LABELS = ["0〜49","50〜149","150〜249","250〜399","400〜699",
                    "700〜1199","1200〜1999","2000〜2699","2700〜"];
 
 function histogram() {
-  var counts = [];
-  var i;
+  var counts = [], i;
   for (i = 0; i < HIST_LABELS.length; i++) counts.push(0);
   for (i = 0; i < durs.length; i++) {
     for (var j = 0; j < HIST_LABELS.length; j++) {
-      if (durs[i].ms >= HIST_EDGES[j] && durs[i].ms < HIST_EDGES[j+1]) { counts[j]++; break; }
+      if (durs[i].msRecv >= HIST_EDGES[j] && durs[i].msRecv < HIST_EDGES[j+1]) { counts[j]++; break; }
     }
   }
   return counts;
@@ -476,7 +481,7 @@ function predTable() {
     for (var i = 0; i < durs.length; i++) {
       var d = durs[i];
       if (d.cc === null || d.pred === null) continue;
-      if (d.cc >= lo && d.cc < hi) { n++; sumReal += d.ms; sumPred += d.pred; }
+      if (d.cc >= lo && d.cc < hi) { n++; sumReal += d.msRecv; sumPred += d.pred; }
     }
     if (n) rows.push({ lo: lo, hi: hi - 1, n: n,
                        real: Math.round(sumReal/n), pred: Math.round(sumPred/n) });
@@ -506,13 +511,26 @@ function render() {
   }
   document.getElementById("pitchWrap").innerHTML = h;
 
-  // --- 音の長さ ---
-  var d = durStats();
-  document.getElementById("durWrap").innerHTML = d
-    ? '<table><tr><th>件数</th><th>最短</th><th>最長</th><th>平均</th><th>250ms未満</th></tr><tr><td>' +
-      d.n + "</td><td>" + d.min + " ms</td><td>" + d.max + " ms</td><td>" + d.avg + " ms</td><td>" +
-      d.under250 + " 件</td></tr></table>"
+  // --- 音の長さ（両方） ---
+  var dr = durStats("msRecv"), dd = durStats("msDev");
+  document.getElementById("durWrap").innerHTML = dr
+    ? '<table><tr><th>時刻の出どころ</th><th>件数</th><th>最短</th><th>最長</th><th>平均</th><th>250ms未満</th></tr>' +
+      "<tr><td>受信（判定に使う）</td><td>" + dr.n + "</td><td>" + dr.min + "</td><td>" + dr.max +
+      "</td><td>" + dr.avg + "</td><td>" + dr.under250 + " 件</td></tr>" +
+      "<tr><td>装置（診断用）</td><td>" + dd.n + "</td><td>" + dd.min + "</td><td>" + dd.max +
+      "</td><td>" + dd.avg + "</td><td>" + dd.under250 + " 件</td></tr></table>" +
+      '<div class="empty">単位はミリ秒</div>'
     : '<div class="empty">まだ測れていません</div>';
+
+  // --- 装置時刻の診断 ---
+  var uniq = Object.keys(tsSeen).length;
+  document.getElementById("diagWrap").innerHTML =
+    '<table><tr><th>項目</th><th>値</th></tr>' +
+    "<tr" + (uniq <= 1 ? ' class="warn"' : "") + "><td>時刻の異なる値の種類</td><td>" + uniq + " 種</td></tr>" +
+    "<tr" + (tsChanges === 0 ? ' class="warn"' : "") + "><td>時刻が変わった回数</td><td>" + tsChanges + " 回</td></tr>" +
+    "<tr><td>最初の値 / 最後の値</td><td>" + (tsFirst===null?"—":tsFirst) + " / " + (tsLast===null?"—":tsLast) + "</td></tr>" +
+    "<tr><td>基準を取り直した回数</td><td>" + resyncCount + " 回</td></tr></table>" +
+    '<div class="empty">赤い行が出たら、装置は時刻を更新していません（＝装置側の性質。こちらのコードでは直せません）</div>';
 
   // --- 分布 ---
   if (!durs.length) {
@@ -540,8 +558,8 @@ function render() {
     for (i = 0; i < rows.length; i++) {
       var r = rows[i];
       ph += "<tr><td>" + r.lo + "〜" + r.hi + "</td><td>" + r.n + "</td><td>" + r.real +
-            " ms</td><td>" + r.pred + " ms</td><td>" + (r.real - r.pred >= 0 ? "+" : "") +
-            (r.real - r.pred) + " ms</td></tr>";
+            "</td><td>" + r.pred + "</td><td>" + (r.real - r.pred >= 0 ? "+" : "") +
+            (r.real - r.pred) + "</td></tr>";
     }
     ph += "</table>";
     document.getElementById("predWrap").innerHTML = ph;
@@ -554,7 +572,6 @@ function render() {
     "<tr><td>Note Off</td><td>" + offCount + " 件</td></tr>" +
     "<tr><td>対応するOnが無かったOff</td><td>" + orphanOff + " 件</td></tr>" +
     "<tr><td>声部が足りず奪った回数</td><td>" + stolen + " 件</td></tr>" +
-    "<tr><td>時刻の基準を取り直した回数</td><td>" + resyncCount + " 回</td></tr>" +
     "<tr><td>CC</td><td>" + ccCount + " 件（範囲 " +
       (ccMin===999?"—":ccMin) + "〜" + (ccMax===-1?"—":ccMax) + "）</td></tr>" +
     "<tr><td>総メッセージ</td><td>" + total + " 件</td></tr>" +
@@ -594,18 +611,25 @@ function buildReport() {
   }
   if (keys.length) L.push("種類 " + keys.length + " 種 / 最小 " + keys[0] + " / 最大 " + keys[keys.length-1]);
   L.push("");
-  L.push("## 音の長さ（装置の時刻で実測）");
-  var d = durStats();
-  L.push(d ? ("件数 " + d.n + " / 最短 " + d.min + "ms / 最長 " + d.max + "ms / 平均 " + d.avg +
-              "ms / 250ms未満 " + d.under250 + "件")
-           : "（測定なし）");
+  L.push("## 音の長さ（ミリ秒）");
+  var dr = durStats("msRecv"), dd = durStats("msDev");
+  if (dr) {
+    L.push("受信の時刻（判定用）: 件数 " + dr.n + " / 最短 " + dr.min + " / 最長 " + dr.max +
+           " / 平均 " + dr.avg + " / 250未満 " + dr.under250 + "件");
+    L.push("装置の時刻（診断用）: 件数 " + dd.n + " / 最短 " + dd.min + " / 最長 " + dd.max +
+           " / 平均 " + dd.avg + " / 250未満 " + dd.under250 + "件");
+  } else { L.push("（測定なし）"); }
   L.push("");
-  L.push("## 音の長さの分布");
+  L.push("## 装置の時刻が使えるか");
+  L.push("異なる値の種類 " + Object.keys(tsSeen).length + " 種 / 変わった回数 " + tsChanges +
+         " / 最初 " + (tsFirst===null?"—":tsFirst) + " / 最後 " + (tsLast===null?"—":tsLast) +
+         " / 基準の取り直し " + resyncCount + " 回");
+  L.push("");
+  L.push("## 音の長さの分布（受信の時刻）");
   if (durs.length) {
     var counts = histogram();
     for (i = 0; i < HIST_LABELS.length; i++) {
-      L.push(HIST_LABELS[i] + "\t" + counts[i] + "\t" +
-             (counts[i]*100/durs.length).toFixed(1) + "%");
+      L.push(HIST_LABELS[i] + "\t" + counts[i] + "\t" + (counts[i]*100/durs.length).toFixed(1) + "%");
     }
   } else { L.push("（測定なし）"); }
   L.push("");
@@ -621,7 +645,7 @@ function buildReport() {
   L.push("## 受信の内訳");
   L.push("Note On " + onCount + " / Note Off " + offCount +
          " / 対応するOnが無かったOff " + orphanOff + " / 声部を奪った回数 " + stolen);
-  L.push("同時発音の最大 " + maxVoices + " / 時刻の基準を取り直した回数 " + resyncCount);
+  L.push("同時発音の最大 " + maxVoices);
   L.push("CC " + ccCount + " 件（範囲 " + (ccMin===999?"—":ccMin) + "〜" + (ccMax===-1?"—":ccMax) + "）");
   L.push("");
   L.push("## エラー");
@@ -655,7 +679,7 @@ function copyReport() {
 }
 
 /* ==================================================================
-   起動 — このタップが音の許可を兼ねる
+   起動
 ================================================================== */
 document.getElementById("btnStart").addEventListener("click", function () {
   if (typeof Tone === "undefined") {
