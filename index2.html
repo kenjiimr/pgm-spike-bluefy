@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>触れると鳴る</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #07090c; color: #cfd4da; overflow: hidden;
+    font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none; user-select: none;
+  }
+  #cv { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* 未接続のときだけ出るボタン */
+  #btnStart {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    min-width: 168px; min-height: 60px; padding: 12px 26px;
+    font-size: 17px; font-family: inherit; letter-spacing: .18em;
+    color: #cfd4da; background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.22); border-radius: 34px;
+  }
+  #btnStart:active { background: rgba(255,255,255,.11); }
+
+  /* 触れているかどうかだけを言葉で置く。数値は持たない（D-23） */
+  #hint {
+    position: fixed; left: 0; right: 0; bottom: 26px; text-align: center;
+    font-size: 13px; letter-spacing: .22em; color: rgba(207,212,218,.5);
+    pointer-events: none; transition: opacity 900ms ease;
+  }
+
+  #btnPanel {
+    position: fixed; right: 14px; bottom: 14px; width: 44px; height: 44px;
+    border-radius: 22px; border: 1px solid rgba(255,255,255,.16);
+    background: rgba(255,255,255,.04); color: #8b939c;
+    font-size: 17px; line-height: 1; font-family: inherit;
+  }
+  #btnPanel:active { background: rgba(255,255,255,.12); }
+
+  #panel {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: none; padding: 14px 16px 74px;
+    background: rgba(7,9,12,.95); border-top: 1px solid rgba(255,255,255,.12);
+    max-height: 74vh; overflow-y: auto;
+    -webkit-user-select: text; user-select: text;
+  }
+  #panel.open { display: block; }
+  .prow { display: flex; gap: 10px; align-items: center; margin: 0 0 8px; }
+  .prow span { flex: 0 0 4.5em; font-size: 12.5px; color: #767f89; letter-spacing: .08em; }
+  select {
+    flex: 1 1 auto; min-height: 44px; padding: 8px 10px; font-size: 14px;
+    font-family: inherit; color: #dfe4ea; background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.16); border-radius: 8px;
+  }
+  #panel hr { border: 0; border-top: 1px solid rgba(255,255,255,.1); margin: 14px 0 10px; }
+  #panel dl {
+    margin: 0; display: grid; grid-template-columns: 8.5em 1fr; gap: 2px 10px;
+    font-size: 13px; line-height: 1.7; font-variant-numeric: tabular-nums;
+  }
+  #panel dt { color: #767f89; }
+  #panel dd { margin: 0; color: #dfe4ea; word-break: break-all; }
+  #panel dd.err { color: #ff9d9d; }
+</style>
+</head>
+<body>
+
+<canvas id="cv"></canvas>
+<button id="btnStart">はじまる</button>
+<div id="hint"></div>
+<button id="btnPanel" aria-label="設定">⌃</button>
+
+<div id="panel">
+  <div class="prow"><span>音階</span>
+    <select id="selScale">
+      <option value="mixolydian" selected>ミクソリディアン</option>
+      <option value="raw">そのまま（丸めない）</option>
+      <option value="ritsu">律旋法</option>
+      <option value="major">長音階</option>
+      <option value="minor">短音階</option>
+      <option value="pentaMajor">ペンタトニック（明）</option>
+      <option value="pentaMinor">ペンタトニック（暗）</option>
+    </select>
+  </div>
+  <div class="prow"><span>音色</span>
+    <select id="selOsc">
+      <option value="triangle" selected>やわらかい</option>
+      <option value="sine">まるい</option>
+      <option value="square">くっきり</option>
+      <option value="sawtooth">ざらつく</option>
+      <option value="sawtooth4">ざらつき控えめ</option>
+      <option value="fatsawtooth">厚い</option>
+      <option value="fattriangle">厚くやわらかい</option>
+      <option value="pwm">ゆらぐ</option>
+      <option value="fmsine">金属的</option>
+      <option value="amtriangle">震える</option>
+    </select>
+  </div>
+  <div class="prow"><span>鳴り方</span>
+    <select id="selEnv">
+      <option value="now" selected>滲む</option>
+      <option value="pluck">弾く</option>
+      <option value="pad">伸びる</option>
+      <option value="dot">点</option>
+    </select>
+  </div>
+  <div class="prow"><span>音数</span>
+    <select id="selVoices">
+      <option value="1">1</option>
+      <option value="2">2</option>
+      <option value="3">3</option>
+      <option value="4">4</option>
+      <option value="6">6</option>
+      <option value="8" selected>8</option>
+      <option value="16">16</option>
+    </select>
+  </div>
+
+  <hr>
+  <dl>
+    <dt>つながり</dt>     <dd id="vConn">まだ つながっていない</dd>
+    <dt>いま鳴っている</dt><dd id="vNow">0</dd>
+    <dt>届いている値</dt> <dd id="vCC">—</dd>
+    <dt>毎秒の受信</dt>   <dd id="vRate">0 件/秒</dd>
+    <dt>エラー</dt>       <dd id="vErr" class="err">—</dd>
+  </dl>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+<script>
+"use strict";
+
+/* ==================================================================
+   定数
+================================================================== */
+var CC_TARGET   = 80;        // 描画に使うCC番号（実測で確定）
+var CC_MAX      = 127;
+var VOICE_COUNT = 16;        // 用意する音源の数（上限）
+var VOICE_DB    = -10;
+var LIMITER_DB  = -6;
+var MIDI_LO     = 36, MIDI_HI = 96;   // 装置が出す音域
+
+var QUIET_MS    = 1200;      // これだけNote Onが来なければ「離している」とみなす
+var SILENCE_MS  = 4000;      // 何も届かなくなったら鳴っている音を止める（D-13④）
+var SPAN_MS     = 24000;     // 画面の横幅が表す時間
+
+var MIDI_SERVICE = "03b80e5a-ede8-4b33-a751-6ce34ec4c700";
+var MIDI_CHAR    = "7772e5db-3868-4112-a1a9-f2669d106bf3";
+
+var SCALES = {
+  raw:        null,
+  mixolydian: [0,2,4,5,7,9,10],
+  ritsu:      [0,2,5,7,9],
+  major:      [0,2,4,5,7,9,11],
+  minor:      [0,2,3,5,7,8,10],
+  pentaMajor: [0,2,4,7,9],
+  pentaMinor: [0,3,5,7,10]
+};
+var ENV_PRESETS = {
+  now:   { attack: 0.02,  decay: 0.25, sustain: 0.25, release: 1.2  },
+  pluck: { attack: 0.002, decay: 0.12, sustain: 0,    release: 0.25 },
+  pad:   { attack: 0.35,  decay: 0.5,  sustain: 0.7,  release: 2.5  },
+  dot:   { attack: 0.001, decay: 0.05, sustain: 0,    release: 0.08 }
+};
+
+/* ==================================================================
+   状態
+================================================================== */
+var elStart = document.getElementById("btnStart");
+var elPanel = document.getElementById("panel");
+var elHint  = document.getElementById("hint");
+var cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+
+var device = null, state = "未接続";
+var audioReady = false, limiter = null, voices = [];
+var voiceLimit = 8;
+
+var segs = [];        // 音の線 {midi, t0, t1}
+var ccHist = [];      // CCの帯 {t, v}
+var lastNoteAt = 0, lastRecvAt = 0;
+var lastCcVal = null;
+var rateWindow = [];
+var glow = 0;         // 画面の明るさ（0..1）。触れていると上がる
+
+/* ==================================================================
+   エラーは握りつぶさない
+================================================================== */
+function pushError(where, e) {
+  var t = (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : String(e));
+  document.getElementById("vErr").textContent = hhmmss(Date.now()) + " [" + where + "] " + t;
+}
+window.addEventListener("error", function (ev) {
+  pushError("window.onerror", ev.error || { name: "Error", message: ev.message });
+});
+window.addEventListener("unhandledrejection", function (ev) {
+  pushError("unhandledrejection", ev.reason);
+});
+function hhmmss(t) {
+  var d = new Date(t);
+  function z(n) { return (n < 10 ? "0" : "") + n; }
+  return z(d.getHours()) + ":" + z(d.getMinutes()) + ":" + z(d.getSeconds());
+}
+
+/* ==================================================================
+   音 — 装置のノートをそのまま鳴らす（音源16個）
+================================================================== */
+function currentOsc() {
+  var el = document.getElementById("selOsc");
+  return (el && el.value) ? el.value : "triangle";
+}
+function currentEnv() {
+  var el = document.getElementById("selEnv");
+  return ENV_PRESETS[(el && el.value) ? el.value : "now"] || ENV_PRESETS.now;
+}
+function buildAudio() {
+  limiter = new Tone.Limiter(LIMITER_DB).toDestination();
+  for (var i = 0; i < VOICE_COUNT; i++) {
+    var s = new Tone.Synth({ oscillator: { type: currentOsc() }, envelope: currentEnv() });
+    s.volume.value = VOICE_DB;
+    s.connect(limiter);
+    voices.push({ synth: s, midi: null, at: 0, seg: null, busy: false });
+  }
+  audioReady = true;
+  applyVoiceLimit();
+}
+function applyTone() {
+  if (!audioReady) return;
+  var t = currentOsc(), e = currentEnv();
+  for (var i = 0; i < voices.length; i++) {
+    try {
+      voices[i].synth.oscillator.type  = t;
+      voices[i].synth.envelope.attack  = e.attack;
+      voices[i].synth.envelope.decay   = e.decay;
+      voices[i].synth.envelope.sustain = e.sustain;
+      voices[i].synth.envelope.release = e.release;
+    } catch (err) { pushError("applyTone", err); }
+  }
+}
+function applyVoiceLimit() {
+  var el = document.getElementById("selVoices");
+  voiceLimit = el ? parseInt(el.value, 10) : VOICE_COUNT;
+  if (!voiceLimit || voiceLimit < 1) voiceLimit = 1;
+  if (voiceLimit > VOICE_COUNT) voiceLimit = VOICE_COUNT;
+  if (!audioReady) return;
+  for (var i = voiceLimit; i < voices.length; i++) releaseVoice(voices[i]);
+}
+document.getElementById("selOsc").addEventListener("change", applyTone);
+document.getElementById("selEnv").addEventListener("change", applyTone);
+document.getElementById("selVoices").addEventListener("change", applyVoiceLimit);
+
+/* 音階 — 鳴らす高さだけ丸める（層B。D-22） */
+function quantize(m) {
+  var el = document.getElementById("selScale");
+  var sc = SCALES[(el && el.value) ? el.value : "mixolydian"];
+  if (!sc) return m;
+  var pc = ((m % 12) + 12) % 12, base = m - pc;
+  for (var i = 0; i < sc.length; i++) if (sc[i] >= pc) return base + sc[i];
+  return base + 12 + sc[0];
+}
+function midiToFreq(m) { return Tone.Frequency(m, "midi").toFrequency(); }
+
+function releaseVoice(v) {
+  if (!v.busy) return;
+  try { v.synth.triggerRelease(); } catch (e) { pushError("release", e); }
+  if (v.seg && v.seg.t1 === null) v.seg.t1 = Date.now();
+  v.busy = false; v.midi = null; v.seg = null;
+}
+function takeVoice() {
+  var i;
+  for (i = 0; i < voiceLimit; i++) if (!voices[i].busy) return voices[i];
+  var oldest = null;
+  for (i = 0; i < voiceLimit; i++) if (!oldest || voices[i].at < oldest.at) oldest = voices[i];
+  releaseVoice(oldest);
+  return oldest;
+}
+function busyCount() {
+  var n = 0;
+  for (var i = 0; i < voices.length; i++) if (voices[i].busy) n++;
+  return n;
+}
+
+function noteOn(midi, vel) {
+  if (!audioReady) return;
+  var now = Date.now();
+  var v = takeVoice();
+  var played = quantize(midi);
+  try { v.synth.triggerAttack(midiToFreq(played), undefined, (vel || 100) / 127); }
+  catch (e) { pushError("noteOn", e); return; }
+  var seg = { midi: played, t0: now, t1: null };
+  segs.push(seg);
+  v.midi = midi; v.at = now; v.seg = seg; v.busy = true;
+  lastNoteAt = now;
+}
+function noteOff(midi) {
+  if (!audioReady) return;
+  var target = null;
+  for (var i = 0; i < voices.length; i++) {
+    var v = voices[i];
+    if (v.busy && v.midi === midi && (!target || v.at < target.at)) target = v;
+  }
+  if (target) releaseVoice(target);
+}
+function stopAll() {
+  for (var i = 0; i < voices.length; i++) releaseVoice(voices[i]);
+}
+
+/* ==================================================================
+   描画 — 装置の出力から直接描く。2系統を別々に描く
+================================================================== */
+function fit() {
+  var r = window.devicePixelRatio || 1;
+  cv.width  = Math.floor(cv.clientWidth  * r);
+  cv.height = Math.floor(cv.clientHeight * r);
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+function yOf(midi, h) {
+  var r = (midi - MIDI_LO) / (MIDI_HI - MIDI_LO);
+  if (r < 0) r = 0;
+  if (r > 1) r = 1;
+  return (h * 0.86) - r * (h * 0.72);      // 高い音ほど上
+}
+
+function draw() {
+  var w = cv.clientWidth, h = cv.clientHeight, now = Date.now();
+  var pxPerMs = w / SPAN_MS;
+
+  // 触れているか（Note Onが途切れていないか）
+  var touching = (now - lastNoteAt) < QUIET_MS;
+  var target = touching ? 1 : 0;
+  glow += (target - glow) * 0.045;          // ゆっくり追従させる＝沈黙が見える
+
+  // 地
+  ctx.fillStyle = "#07090c";
+  ctx.fillRect(0, 0, w, h);
+  var bg = ctx.createRadialGradient(w / 2, h * 0.52, 0, w / 2, h * 0.52, Math.max(w, h) * 0.72);
+  bg.addColorStop(0, "rgba(46,86,72," + (0.30 * glow).toFixed(3) + ")");
+  bg.addColorStop(1, "rgba(7,9,12,0)");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  // CC80 — 連続の帯（下から）
+  while (ccHist.length && now - ccHist[0].t > SPAN_MS) ccHist.shift();
+  if (ccHist.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(w - (now - ccHist[0].t) * pxPerMs, h);
+    for (var i = 0; i < ccHist.length; i++) {
+      var p = ccHist[i];
+      ctx.lineTo(w - (now - p.t) * pxPerMs, h - (p.v / CC_MAX) * (h * 0.16) - 2);
+    }
+    ctx.lineTo(w - (now - ccHist[ccHist.length - 1].t) * pxPerMs, h);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(90,150,170,.16)";
+    ctx.fill();
+  }
+
+  // Note — 離散の線。長さがそのまま横の長さになる
+  ctx.lineCap = "round";
+  for (var k = segs.length - 1; k >= 0; k--) {
+    var s = segs[k];
+    var end = (s.t1 === null) ? now : s.t1;
+    if (now - end > SPAN_MS) { segs.splice(k, 1); continue; }
+    var x1 = w - (now - s.t0) * pxPerMs;
+    var x2 = w - (now - end) * pxPerMs;
+    var y  = yOf(s.midi, h);
+    var age = (now - end) / SPAN_MS;          // 0（新しい）〜1（消える）
+    var a   = (1 - age) * (s.t1 === null ? 0.95 : 0.72);
+    ctx.strokeStyle = "rgba(214,238,226," + a.toFixed(3) + ")";
+    ctx.lineWidth = (s.t1 === null) ? 3.2 : 2.4;
+    ctx.beginPath();
+    ctx.moveTo(x1, y);
+    ctx.lineTo(Math.max(x2, x1 + 1.5), y);
+    ctx.stroke();
+    if (s.t1 === null) {                       // 鳴っている音の先端
+      ctx.fillStyle = "rgba(236,250,243," + (0.8 * (0.55 + 0.45 * glow)).toFixed(3) + ")";
+      ctx.beginPath();
+      ctx.arc(x2, y, 3.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  requestAnimationFrame(draw);
+}
+
+/* ==================================================================
+   受信（機能1・確定済みの実装をそのまま使う）
+================================================================== */
+function parseBleMidi(b) {
+  var out = [];
+  if (!b || b.length < 3) return out;
+  var i = 1, running = 0;
+  while (i < b.length) {
+    if (b[i] & 0x80) { i++; if (i >= b.length) break; }
+    var status;
+    if (b[i] & 0x80) {
+      status = b[i]; i++;
+      if (status >= 0xF8) { out.push({ status: status, d1: null, d2: null }); continue; }
+      running = (status < 0xF0) ? status : 0;
+    } else {
+      status = running;
+      if (!status) { i++; continue; }
+    }
+    var need;
+    if (status === 0xF0) {
+      while (i < b.length && b[i] !== 0xF7) i++;
+      i++;
+      out.push({ status: 0xF0, d1: null, d2: null });
+      continue;
+    } else if (status >= 0xF0) {
+      need = (status === 0xF1 || status === 0xF3) ? 1 : (status === 0xF2 ? 2 : 0);
+    } else {
+      var t = status & 0xF0;
+      need = (t === 0xC0 || t === 0xD0) ? 1 : 2;
+    }
+    if (i + need > b.length) break;
+    var d1 = need >= 1 ? b[i++] : null;
+    var d2 = need >= 2 ? b[i++] : null;
+    out.push({ status: status, d1: d1, d2: d2 });
+  }
+  return out;
+}
+
+function onValue(ev) {
+  try {
+    var dv = ev.target.value;
+    var bytes = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    var msgs = parseBleMidi(bytes);
+    var now = Date.now();
+    for (var k = 0; k < msgs.length; k++) {
+      var m = msgs[k];
+      if (m.status >= 0xF0) continue;
+      var type = m.status & 0xF0;
+      lastRecvAt = now;
+      rateWindow.push(now);
+      if (state !== "受信中") state = "受信中";
+      if (type === 0x90 && m.d2 > 0) noteOn(m.d1, m.d2);
+      else if (type === 0x80 || type === 0x90) noteOff(m.d1);
+      else if (type === 0xB0 && m.d1 === CC_TARGET) {
+        lastCcVal = m.d2;
+        ccHist.push({ t: now, v: m.d2 });
+      }
+    }
+  } catch (e) { pushError("onValue", e); }
+}
+
+/* ==================================================================
+   接続
+================================================================== */
+function start() {
+  if (!navigator.bluetooth) {
+    pushError("start", { name: "NotSupported",
+      message: "このブラウザには navigator.bluetooth がありません（iOSではBluefy等が要ります）" });
+    return;
+  }
+  if (typeof Tone === "undefined") {
+    pushError("start", { name: "ToneNotLoaded",
+      message: "Tone.js を読み込めていません（回線かCDNを確認してください）" });
+    return;
+  }
+  Tone.start().then(function () {
+    if (!audioReady) buildAudio();
+    // PlantWaveはBLEの広告にMIDIサービスを載せていないため filters では出てこない
+    return navigator.bluetooth.requestDevice({
+      acceptAllDevices: true, optionalServices: [MIDI_SERVICE]
+    });
+  }).then(function (d) {
+    device = d; state = "接続中";
+    d.addEventListener("gattserverdisconnected", onDisconnected);
+    return d.gatt.connect();
+  }).then(function (server) {
+    return server.getPrimaryService(MIDI_SERVICE);
+  }).then(function (service) {
+    return service.getCharacteristic(MIDI_CHAR);
+  }).then(function (ch) {
+    ch.addEventListener("characteristicvaluechanged", onValue);
+    return ch.startNotifications();
+  }).then(function () {
+    state = "待っている";
+    lastRecvAt = Date.now();
+    elStart.style.display = "none";
+  }).catch(function (e) {
+    state = "未接続";
+    pushError("start", e);
+  });
+}
+function onDisconnected() {
+  state = "切断";
+  stopAll();
+  elStart.style.display = "";
+}
+elStart.addEventListener("click", start);
+
+document.getElementById("btnPanel").addEventListener("click", function () {
+  elPanel.classList.toggle("open");
+  this.textContent = elPanel.classList.contains("open") ? "⌄" : "⌃";
+});
+
+/* ==================================================================
+   見張りと表示
+================================================================== */
+setInterval(function () {
+  var now = Date.now();
+  while (rateWindow.length && now - rateWindow[0] > 1000) rateWindow.shift();
+
+  if (state === "受信中" && now - lastRecvAt > SILENCE_MS) { state = "待っている"; stopAll(); }
+
+  if (state === "未接続" || state === "接続中") elHint.textContent = "";
+  else if ((now - lastNoteAt) < QUIET_MS)       elHint.textContent = "鳴っている";
+  else                                          elHint.textContent = "沈黙";
+  elHint.style.opacity = (state === "未接続") ? 0 : 1;
+
+  if (elPanel.classList.contains("open")) {
+    document.getElementById("vConn").textContent =
+      state + (device && device.name ? "（" + device.name + "）" : "");
+    document.getElementById("vNow").textContent  = busyCount();
+    document.getElementById("vCC").textContent   = (lastCcVal === null) ? "—" : ("CC80 = " + lastCcVal);
+    document.getElementById("vRate").textContent = rateWindow.length + " 件/秒";
+  }
+}, 200);
+
+fit();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
