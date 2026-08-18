@@ -73,6 +73,31 @@
     text-align: right; text-align-last: right;
   }
   select:focus { outline: none; }
+  /* つまみの行 */
+  .srow {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,.055);
+  }
+  .srow > span { flex: 0 0 auto; font-size: 13px; color: #79818a; letter-spacing: .14em; }
+  .srow > b {
+    flex: 0 0 2.4em; text-align: right; font-size: 13px; font-weight: 400;
+    color: #aab2bb; font-variant-numeric: tabular-nums;
+  }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    flex: 1 1 auto; height: 24px; background: transparent;
+  }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 1px; background: rgba(255,255,255,.18);
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 17px; height: 17px; margin-top: -8px;
+    border-radius: 50%; background: #d6eee2; border: 0;
+  }
+  input[type=range]::-moz-range-track { height: 1px; background: rgba(255,255,255,.18); }
+  input[type=range]::-moz-range-thumb {
+    width: 17px; height: 17px; border-radius: 50%; background: #d6eee2; border: 0;
+  }
   .settings hr { border: 0; border-top: 1px solid rgba(255,255,255,.07); margin: 30px 0 12px; }
   dl {
     margin: 0; display: grid; grid-template-columns: 8.5em 1fr; gap: 3px 12px;
@@ -161,6 +186,15 @@
     </select>
   </div>
 
+  <div class="srow"><span>密度</span>
+    <input type="range" id="rngDense" min="0" max="100" step="1" value="45">
+    <b id="vDense">45</b>
+  </div>
+  <div class="srow"><span>音域</span>
+    <input type="range" id="rngOct" min="1" max="5" step="1" value="2">
+    <b id="vOct">2</b>
+  </div>
+
   <hr>
   <dl>
     <dt>つながり</dt>     <dd id="vConn">まだ つながっていない</dd>
@@ -185,6 +219,8 @@ var VOICE_DB    = -10;
 var LIMITER_DB  = -6;
 var MIDI_LO     = 36, MIDI_HI = 96;   // 装置が出す音域
 
+var GAP_MAX     = 700;       // 密度0のときの、音と音の最短間隔（ms）
+var FOLD_LO     = 48;        // 音域を畳むときの下端（C3）
 var QUIET_MS    = 1200;      // これだけNote Onが来なければ「離している」とみなす
 var SILENCE_MS  = 4000;      // 何も届かなくなったら鳴っている音を止める（D-13④）
 var SPAN_MS     = 24000;     // 画面の横幅が表す時間
@@ -230,6 +266,7 @@ var lastNoteAt = 0, lastRecvAt = 0;
 var lastCcVal = null;
 var rateWindow = [];
 var glow = 0;         // 0（沈黙）〜1（鳴っている）
+var lastPlayAt = 0;   // 間引きの判定に使う
 
 /* ==================================================================
    エラーは握りつぶさない
@@ -297,6 +334,37 @@ document.getElementById("selOsc").addEventListener("change", applyTone);
 document.getElementById("selEnv").addEventListener("change", applyTone);
 document.getElementById("selVoices").addEventListener("change", applyVoiceLimit);
 
+/* つまみの数字を出す。つまみ自体は毎回読むので、反映は即時 */
+function showSliders() {
+  document.getElementById("vDense").textContent = document.getElementById("rngDense").value;
+  var n = document.getElementById("rngOct").value;
+  document.getElementById("vOct").textContent = (n === "5") ? "—" : n;
+}
+document.getElementById("rngDense").addEventListener("input", showSliders);
+document.getElementById("rngOct").addEventListener("input", showSliders);
+showSliders();
+
+/* 密度 — 100で装置の出力をすべて鳴らす。下げるほど間引く */
+function minGap() {
+  var el = document.getElementById("rngDense");
+  var d = el ? parseInt(el.value, 10) : 45;
+  return (1 - d / 100) * GAP_MAX;
+}
+
+/* 音域 — 1〜4オクターブへ畳む。5は畳まない（装置の音域そのまま） */
+function octaves() {
+  var el = document.getElementById("rngOct");
+  return el ? parseInt(el.value, 10) : 2;
+}
+function fold(m) {
+  var n = octaves();
+  if (n >= 5) return m;
+  var hi = FOLD_LO + 12 * n;
+  while (m >= hi) m -= 12;
+  while (m < FOLD_LO) m += 12;
+  return m;
+}
+
 /* 音階とキー — 鳴らす高さだけ丸める（層B。D-22） */
 function quantize(m) {
   var el = document.getElementById("selScale");
@@ -334,8 +402,10 @@ function busyCount() {
 function noteOn(midi, vel) {
   if (!audioReady) return;
   var now = Date.now();
+  if (now - lastPlayAt < minGap()) return;      // 密度: 間引く
+  lastPlayAt = now;
   var v = takeVoice();
-  var played = quantize(midi);
+  var played = quantize(fold(midi));
   try { v.synth.triggerAttack(midiToFreq(played), undefined, (vel || 100) / 127); }
   catch (e) { pushError("noteOn", e); return; }
   var seg = { midi: played, t0: now, t1: null };
@@ -369,7 +439,10 @@ window.addEventListener("resize", fit);
 window.addEventListener("orientationchange", fit);
 
 function yOf(midi, h) {
-  var r = (midi - MIDI_LO) / (MIDI_HI - MIDI_LO);
+  var n = octaves();
+  var lo = (n >= 5) ? MIDI_LO : FOLD_LO;
+  var hi = (n >= 5) ? MIDI_HI : (FOLD_LO + 12 * n);
+  var r = (midi - lo) / (hi - lo);
   if (r < 0) r = 0;
   if (r > 1) r = 1;
   return (h * 0.86) - r * (h * 0.72);      // 高い音ほど上
