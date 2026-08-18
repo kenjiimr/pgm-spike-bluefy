@@ -347,24 +347,53 @@ function setMaybe(obj, key, val) {
 }
 
 /* 録音の音源は1つを使い回す。選ばれた時に初めて読み込む */
+var SAMPLE_NAMES = ["C3","E3","G3","B3","D4","A4","C5","E5","G5","B5","D6","A6"];
+var SAMPLE_DIR   = "samples/harp/";
+
+function updateSamplerState(got, failed) {
+  if (samplerReady) return;
+  samplerState = "取得 " + got + "/" + SAMPLE_NAMES.length
+               + (failed ? "（失敗 " + failed + "）" : "") + " ・展開待ち";
+}
+
 function ensureSampler() {
   if (sampler) return sampler;
-  samplerState = "読み込み中";
+  samplerState = "取得 0/" + SAMPLE_NAMES.length;
+
+  // ① 12個を自分で取りにいって、何個取れたかを数える（原因の切り分け用）
+  var got = 0, failed = 0;
+  SAMPLE_NAMES.forEach(function (n) {
+    var url = SAMPLE_DIR + n + ".mp3";
+    fetch(url).then(function (r) {
+      if (r.ok) got++;
+      else { failed++; pushError("取得 " + n, { name: "HTTP " + r.status, message: url }); }
+      updateSamplerState(got, failed);
+    }).catch(function (e) {
+      failed++;
+      pushError("取得 " + n, e);
+      updateSamplerState(got, failed);
+    });
+  });
+
+  // ② Tone.js に読ませる
+  var urls = {};
+  SAMPLE_NAMES.forEach(function (n) { urls[n] = n + ".mp3"; });
   try {
     sampler = new Tone.Sampler({
-      urls: {
-        C3: "C3.mp3", E3: "E3.mp3", G3: "G3.mp3", B3: "B3.mp3",
-        D4: "D4.mp3", A4: "A4.mp3", C5: "C5.mp3", E5: "E5.mp3",
-        G5: "G5.mp3", B5: "B5.mp3", D6: "D6.mp3", A6: "A6.mp3"
-      },
-      baseUrl: "samples/harp/",
+      urls: urls,
+      baseUrl: SAMPLE_DIR,
       release: 1.4,
       onload: function () { samplerReady = true; samplerState = "準備できた"; }
     });
     sampler.connect(limiter);
+    // onload が来ないときのための二本目の道
+    Tone.loaded().then(function () {
+      samplerReady = true;
+      if (samplerState !== "準備できた") samplerState = "準備できた（別経路）";
+    }).catch(function (e) { pushError("Tone.loaded", e); });
   } catch (e) {
     pushError("ensureSampler", e);
-    samplerState = "読み込めなかった";
+    samplerState = "音源を作れなかった";
   }
   return sampler;
 }
