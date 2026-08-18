@@ -52,7 +52,7 @@
 <h1>PGM 素材ページ（段階1）</h1>
 <p class="note">
   装置が出した <b>音の高さ・長さ・強さ・重なり</b> をそのまま鳴らします。<br>
-  音階への丸め直しをしません。CC80は表示だけで音にしません。<br>
+  音階への丸め直しは既定で「そのまま」。選んだときだけ丸めます（表と生ログは常に生の値）。<br><br>
   <b>音が出ないときは、まずiPhoneの消音モードを確認してください。</b>
 </p>
 
@@ -66,6 +66,32 @@
 </div>
 
 <button id="btnPhase" class="away">いま: 離している<br><span style="font-size:12px;font-weight:normal">タップで「触れている」に切り替わります</span></button>
+
+<h2>音階と音数</h2>
+<div class="row">
+  <span class="lbl">音階</span>
+  <select id="selScale">
+    <option value="raw">そのまま（丸めない）</option>
+    <option value="mixolydian">ミクソリディアン</option>
+    <option value="ritsu">律旋法</option>
+    <option value="major">長音階</option>
+    <option value="minor">短音階</option>
+    <option value="pentaMajor">ペンタトニック（明）</option>
+    <option value="pentaMinor">ペンタトニック（暗）</option>
+  </select>
+</div>
+<div class="row">
+  <span class="lbl">音数</span>
+  <select id="selVoices">
+    <option value="1">1</option>
+    <option value="2">2</option>
+    <option value="3">3</option>
+    <option value="4">4</option>
+    <option value="6">6</option>
+    <option value="8">8</option>
+    <option value="16" selected>16（上限）</option>
+  </select>
+</div>
 
 <h2>音色</h2>
 <div class="row">
@@ -146,6 +172,16 @@ var ENV_PRESETS = {
   pad:   { attack: 0.35,  decay: 0.5,  sustain: 0.7,  release: 2.5  },
   dot:   { attack: 0.001, decay: 0.05, sustain: 0,    release: 0.08 }
 };
+var SCALES = {
+  raw:        null,
+  mixolydian: [0,2,4,5,7,9,10],
+  ritsu:      [0,2,5,7,9],
+  major:      [0,2,4,5,7,9,11],
+  minor:      [0,2,3,5,7,8,10],
+  pentaMajor: [0,2,4,7,9],
+  pentaMinor: [0,3,5,7,10]
+};
+var voiceLimit = 16;
 var TS_WRAP     = 8192;    // 装置の時刻カウンタは13ビット
 var TS_RESYNC   = 4000;
 
@@ -262,6 +298,32 @@ function applyTone() {
 document.getElementById("selOsc").addEventListener("change", applyTone);
 document.getElementById("selEnv").addEventListener("change", applyTone);
 
+/* 音階 — 鳴らす高さだけ丸める。記録する midi は生の値のまま */
+function quantize(m) {
+  var el = document.getElementById("selScale");
+  var sc = SCALES[(el && el.value) ? el.value : "raw"];
+  if (!sc) return m;
+  var pc = ((m % 12) + 12) % 12, base = m - pc;
+  for (var i = 0; i < sc.length; i++) if (sc[i] >= pc) return base + sc[i];
+  return base + 12 + sc[0];
+}
+
+/* 音数 — 上限を超えた声部は止める */
+function applyVoiceLimit() {
+  var el = document.getElementById("selVoices");
+  voiceLimit = el ? parseInt(el.value, 10) : VOICE_COUNT;
+  if (!voiceLimit || voiceLimit < 1) voiceLimit = 1;
+  if (voiceLimit > VOICE_COUNT) voiceLimit = VOICE_COUNT;
+  if (!audioReady) return;
+  for (var i = voiceLimit; i < voices.length; i++) {
+    if (voices[i].busy) {
+      try { voices[i].synth.triggerRelease(); } catch (e) { pushError("voiceLimit", e); }
+      voices[i].busy = false; voices[i].midi = null; voices[i].cc = null;
+    }
+  }
+}
+document.getElementById("selVoices").addEventListener("change", applyVoiceLimit);
+
 function busyCount() {
   var n = 0;
   for (var i = 0; i < voices.length; i++) if (voices[i].busy) n++;
@@ -273,9 +335,9 @@ function midiToName(m) { return Tone.Frequency(m, "midi").toNote(); }
 
 function takeVoice() {
   var i;
-  for (i = 0; i < voices.length; i++) if (!voices[i].busy) return voices[i];
+  for (i = 0; i < voiceLimit; i++) if (!voices[i].busy) return voices[i];
   var oldest = null;
-  for (i = 0; i < voices.length; i++) {
+  for (i = 0; i < voiceLimit; i++) {
     if (!oldest || voices[i].at < oldest.at) oldest = voices[i];
   }
   try { oldest.synth.triggerRelease(); } catch (e) { pushError("steal", e); }
@@ -288,7 +350,7 @@ function noteOn(midi, vel, recvAt, devAt) {
   if (!audioReady) return;
   var v = takeVoice();
   try {
-    v.synth.triggerAttack(midiToFreq(midi), undefined, vel / 127);
+    v.synth.triggerAttack(midiToFreq(quantize(midi)), undefined, vel / 127);
   } catch (e) {
     pushError("noteOn", e);
     return;
