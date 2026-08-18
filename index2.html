@@ -107,6 +107,7 @@
   dt { color: #626a73; letter-spacing: .06em; }
   dd { margin: 0; color: #aab2bb; word-break: break-all; }
   dd.err { color: #d98d8d; }
+  .credit { margin: 22px 0 0; font-size: 10.5px; color: #4f575f; letter-spacing: .04em; }
 </style>
 </head>
 <body>
@@ -116,7 +117,7 @@
 <section class="screen">
   <button id="btnStart">はじまる</button>
   <div id="hint"></div>
-  <div id="scrollCue">⌄　設定▼　</div>
+  <div id="scrollCue">⌄　設定はこの下</div>
 </section>
 
 <section class="settings">
@@ -158,6 +159,7 @@
     <select id="selOsc">
       <option value="marimba" selected>マリンバ風</option>
       <option value="gamelan">ガムラン風</option>
+      <option value="harp">ハープ（録音）</option>
       <option value="koto">琴風</option>
       <option value="sanshin">三線風</option>
       <option value="triangle">やわらかい</option>
@@ -208,8 +210,10 @@
     <dt>いま鳴っている</dt><dd id="vNow">0</dd>
     <dt>届いている値</dt> <dd id="vCC">—</dd>
     <dt>毎秒の受信</dt>   <dd id="vRate">0 件/秒</dd>
+    <dt>音源</dt>         <dd id="vSamp">—</dd>
     <dt>エラー</dt>       <dd id="vErr" class="err">—</dd>
   </dl>
+  <p class="credit">音源: tonejs-instruments (Nicholaus P. Brosowsky) — samples CC BY 3.0</p>
 </section>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
@@ -264,6 +268,8 @@ var TIMBRES = {
                  env: { attack: 0.004, decay: 0.72, sustain: 0, release: 0.8 }, db: -8  },
   gamelan:     { osc: "fmsine", harm: 3.4, mod: 6,
                  env: { attack: 0.002, decay: 2.2,  sustain: 0, release: 2.4 }, db: -15 },
+  /* 録音を鳴らす音色。選んだときだけ読み込む */
+  harp:        { cls: "sampler", db: -4 },
   /* 弦は波形では作れない。弾いた弦そのものを模した音源（PluckSynth）へ切り替える */
   sanshin:     { cls: "pluck", noise: 2.6, damp: 5200, res: 0.86, db: -6 },
   koto:        { cls: "pluck", noise: 1.1, damp: 3000, res: 0.94, db: -7 },
@@ -289,8 +295,9 @@ var cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 
 var device = null, state = "未接続";
 var audioReady = false, limiter = null, voices = [];
-var voiceKind = null;   // "synth"（波形から作る）か "pluck"（弾いた弦）か
+var voiceKind = null;   // "synth"（波形）／"pluck"（弾いた弦）／"sampler"（録音）
 var voiceLimit = 8;
+var sampler = null, samplerReady = false, samplerState = "—";
 
 var segs = [];        // 音の線 {midi, t0, t1}
 var ccHist = [];      // CCの帯 {t, v}
@@ -339,23 +346,49 @@ function setMaybe(obj, key, val) {
   else obj[key] = val;
 }
 
+/* 録音の音源は1つを使い回す。選ばれた時に初めて読み込む */
+function ensureSampler() {
+  if (sampler) return sampler;
+  samplerState = "読み込み中";
+  try {
+    sampler = new Tone.Sampler({
+      urls: {
+        C3: "C3.mp3", E3: "E3.mp3", G3: "G3.mp3", B3: "B3.mp3",
+        D4: "D4.mp3", A4: "A4.mp3", C5: "C5.mp3", E5: "E5.mp3",
+        G5: "G5.mp3", B5: "B5.mp3", D6: "D6.mp3", A6: "A6.mp3"
+      },
+      baseUrl: "samples/harp/",
+      release: 1.4,
+      onload: function () { samplerReady = true; samplerState = "準備できた"; }
+    });
+    sampler.connect(limiter);
+  } catch (e) {
+    pushError("ensureSampler", e);
+    samplerState = "読み込めなかった";
+  }
+  return sampler;
+}
+
 function buildVoices(kind) {
-  for (var i = 0; i < voices.length; i++) {
-    try { voices[i].synth.dispose(); } catch (e) { pushError("dispose", e); }
+  // サンプラーは使い回すので捨てない。それ以外は捨てる
+  if (voiceKind !== "sampler") {
+    for (var i = 0; i < voices.length; i++) {
+      try { voices[i].synth.dispose(); } catch (e) { pushError("dispose", e); }
+    }
   }
   voices = [];
   for (var j = 0; j < VOICE_COUNT; j++) {
     var s;
     try {
-      s = (kind === "pluck")
-        ? new Tone.PluckSynth()
-        : new Tone.Synth({ oscillator: { type: "triangle" }, envelope: ENV_PRESETS.now });
+      if (kind === "sampler")      s = ensureSampler();
+      else if (kind === "pluck")   s = new Tone.PluckSynth();
+      else                         s = new Tone.Synth({ oscillator: { type: "triangle" }, envelope: ENV_PRESETS.now });
     } catch (e) {
       pushError("buildVoices", e);
       s = new Tone.Synth();
     }
-    s.connect(limiter);
-    voices.push({ synth: s, midi: null, at: 0, seg: null, busy: false });
+    if (kind !== "sampler") s.connect(limiter);
+    voices.push({ synth: s, midi: null, freq: 0, at: 0, seg: null, busy: false });
   }
   voiceKind = kind;
 }
@@ -378,7 +411,9 @@ function applyTone() {
     var s = voices[i].synth;
     try {
       setMaybe(s, "volume", (tb.db === undefined) ? VOICE_DB : tb.db);
-      if (kind === "pluck") {
+      if (kind === "sampler") {
+        // 録音なので波形も鳴り方も持たない。音量だけ
+      } else if (kind === "pluck") {
         setMaybe(s, "attackNoise", tb.noise);
         setMaybe(s, "dampening",   tb.damp);
         setMaybe(s, "resonance",   tb.res);
@@ -456,7 +491,9 @@ function midiToFreq(m) { return Tone.Frequency(m, "midi").toFrequency(); }
 function releaseVoice(v) {
   if (!v.busy) return;
   // 弾いた弦は途中で止められない（止める仕組みを持たない）。自然に減衰させる
-  if (voiceKind !== "pluck") {
+  if (voiceKind === "sampler") {
+    try { v.synth.triggerRelease(v.freq); } catch (e) { pushError("release", e); }
+  } else if (voiceKind !== "pluck") {
     try { v.synth.triggerRelease(); } catch (e) { pushError("release", e); }
   }
   if (v.seg && v.seg.t1 === null) v.seg.t1 = Date.now();
@@ -479,11 +516,13 @@ function busyCount() {
 function noteOn(midi, vel) {
   if (!audioReady) return;
   var now = Date.now();
+  if (voiceKind === "sampler" && !samplerReady) return;   // 読み込み前は鳴らさない
   if (now - lastPlayAt < minGap()) return;      // 密度: 間引く
   lastPlayAt = now;
   var v = takeVoice();
   var played = quantize(fold(midi));
-  try { v.synth.triggerAttack(midiToFreq(played), undefined, (vel || 100) / 127); }
+  v.freq = midiToFreq(played);
+  try { v.synth.triggerAttack(v.freq, undefined, (vel || 100) / 127); }
   catch (e) { pushError("noteOn", e); return; }
   var seg = { midi: played, t0: now, t1: null };
   segs.push(seg);
@@ -722,6 +761,7 @@ setInterval(function () {
   document.getElementById("vNow").textContent  = busyCount();
   document.getElementById("vCC").textContent   = (lastCcVal === null) ? "—" : ("CC80 = " + lastCcVal);
   document.getElementById("vRate").textContent = rateWindow.length + " 件/秒";
+  document.getElementById("vSamp").textContent = samplerState;
 }, 200);
 
 fit();
