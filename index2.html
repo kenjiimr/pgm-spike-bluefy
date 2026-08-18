@@ -129,6 +129,8 @@
       <option value="lydian">リディアン</option>
       <option value="altered">オルタード</option>
       <option value="okinawa">沖縄音階</option>
+      <option value="yamato">大和音階</option>
+      <option value="miyakobushi">都節音階</option>
       <option value="ritsu">律旋法</option>
       <option value="major">長音階</option>
       <option value="minor">短音階</option>
@@ -156,6 +158,7 @@
     <select id="selOsc">
       <option value="marimba" selected>マリンバ風</option>
       <option value="gamelan">ガムラン風</option>
+      <option value="koto">琴風</option>
       <option value="sanshin">三線風</option>
       <option value="triangle">やわらかい</option>
       <option value="sine">まるい</option>
@@ -239,6 +242,8 @@ var SCALES = {
   lydian:     [0,2,4,6,7,9,11],
   altered:    [0,1,3,4,6,8,10],
   okinawa:    [0,4,5,7,11],
+  yamato:     [0,2,4,7,9],       // ヨナ抜き長音階
+  miyakobushi:[0,1,5,7,8],       // 都節（陰旋法）
   ritsu:      [0,2,5,7,9],
   major:      [0,2,4,5,7,9,11],
   minor:      [0,2,3,5,7,8,10],
@@ -255,12 +260,13 @@ var ENV_PRESETS = {
 /* 音色 — 波形・倍音比・鳴り方・音量をひとまとめにする。
    harm（倍音比）が整数だと楽器らしい音、整数でないと金属的な音になる */
 var TIMBRES = {
-  marimba:     { osc: "fmsine", harm: 4,   mod: 2.2,
-                 env: { attack: 0.001, decay: 0.55, sustain: 0, release: 0.6 }, db: -9  },
+  marimba:     { osc: "fmtriangle", harm: 4, mod: 1.3,
+                 env: { attack: 0.004, decay: 0.72, sustain: 0, release: 0.8 }, db: -8  },
   gamelan:     { osc: "fmsine", harm: 3.4, mod: 6,
                  env: { attack: 0.002, decay: 2.2,  sustain: 0, release: 2.4 }, db: -15 },
-  sanshin:     { osc: "sawtooth4",
-                 env: { attack: 0.001, decay: 0.85, sustain: 0, release: 0.5 }, db: -14 },
+  /* 弦は波形では作れない。弾いた弦そのものを模した音源（PluckSynth）へ切り替える */
+  sanshin:     { cls: "pluck", noise: 2.6, damp: 5200, res: 0.86, db: -6 },
+  koto:        { cls: "pluck", noise: 1.1, damp: 3000, res: 0.94, db: -7 },
   triangle:    { osc: "triangle" },
   sine:        { osc: "sine" },
   square:      { osc: "square",      db: -14 },
@@ -283,6 +289,7 @@ var cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 
 var device = null, state = "未接続";
 var audioReady = false, limiter = null, voices = [];
+var voiceKind = null;   // "synth"（波形から作る）か "pluck"（弾いた弦）か
 var voiceLimit = 8;
 
 var segs = [];        // 音の線 {midi, t0, t1}
@@ -325,36 +332,67 @@ function currentEnv() {
   if (key === "auto") return currentTimbre().env || ENV_PRESETS.now;
   return ENV_PRESETS[key] || ENV_PRESETS.now;
 }
-function buildAudio() {
-  limiter = new Tone.Limiter(LIMITER_DB).toDestination();
-  for (var i = 0; i < VOICE_COUNT; i++) {
-    var s = new Tone.Synth({ oscillator: { type: "triangle" }, envelope: ENV_PRESETS.now });
+/* 値がSignalのこともプレーンな数のこともあるので、両方に対応する */
+function setMaybe(obj, key, val) {
+  if (!obj || val === undefined) return;
+  if (obj[key] && obj[key].value !== undefined) obj[key].value = val;
+  else obj[key] = val;
+}
+
+function buildVoices(kind) {
+  for (var i = 0; i < voices.length; i++) {
+    try { voices[i].synth.dispose(); } catch (e) { pushError("dispose", e); }
+  }
+  voices = [];
+  for (var j = 0; j < VOICE_COUNT; j++) {
+    var s;
+    try {
+      s = (kind === "pluck")
+        ? new Tone.PluckSynth()
+        : new Tone.Synth({ oscillator: { type: "triangle" }, envelope: ENV_PRESETS.now });
+    } catch (e) {
+      pushError("buildVoices", e);
+      s = new Tone.Synth();
+    }
     s.connect(limiter);
     voices.push({ synth: s, midi: null, at: 0, seg: null, busy: false });
   }
+  voiceKind = kind;
+}
+
+function buildAudio() {
+  limiter = new Tone.Limiter(LIMITER_DB).toDestination();
+  buildVoices(currentTimbre().cls || "synth");
   audioReady = true;
   applyTone();
   applyVoiceLimit();
 }
+
 function applyTone() {
   if (!audioReady) return;
   var tb = currentTimbre(), e = currentEnv();
+  var kind = tb.cls || "synth";
+  if (kind !== voiceKind) { buildVoices(kind); applyVoiceLimit(); }
+
   for (var i = 0; i < voices.length; i++) {
-    var o = voices[i].synth.oscillator;
+    var s = voices[i].synth;
     try {
-      o.type = tb.osc;
-      // 倍音比は fm/am 系の波形にしか無い。無い場合は黙って飛ばす
-      if (tb.harm !== undefined && o.harmonicity && o.harmonicity.value !== undefined) {
-        o.harmonicity.value = tb.harm;
+      setMaybe(s, "volume", (tb.db === undefined) ? VOICE_DB : tb.db);
+      if (kind === "pluck") {
+        setMaybe(s, "attackNoise", tb.noise);
+        setMaybe(s, "dampening",   tb.damp);
+        setMaybe(s, "resonance",   tb.res);
+      } else {
+        var o = s.oscillator;
+        o.type = tb.osc;
+        // 倍音比は fm/am 系の波形にしか無い。無ければ黙って飛ばす
+        if (tb.harm !== undefined && o.harmonicity) setMaybe(o, "harmonicity", tb.harm);
+        if (tb.mod  !== undefined && o.modulationIndex) setMaybe(o, "modulationIndex", tb.mod);
+        s.envelope.attack  = e.attack;
+        s.envelope.decay   = e.decay;
+        s.envelope.sustain = e.sustain;
+        s.envelope.release = e.release;
       }
-      if (tb.mod !== undefined && o.modulationIndex && o.modulationIndex.value !== undefined) {
-        o.modulationIndex.value = tb.mod;
-      }
-      voices[i].synth.volume.value    = (tb.db === undefined) ? VOICE_DB : tb.db;
-      voices[i].synth.envelope.attack  = e.attack;
-      voices[i].synth.envelope.decay   = e.decay;
-      voices[i].synth.envelope.sustain = e.sustain;
-      voices[i].synth.envelope.release = e.release;
     } catch (err) { pushError("applyTone", err); }
   }
 }
@@ -417,7 +455,10 @@ function midiToFreq(m) { return Tone.Frequency(m, "midi").toFrequency(); }
 
 function releaseVoice(v) {
   if (!v.busy) return;
-  try { v.synth.triggerRelease(); } catch (e) { pushError("release", e); }
+  // 弾いた弦は途中で止められない（止める仕組みを持たない）。自然に減衰させる
+  if (voiceKind !== "pluck") {
+    try { v.synth.triggerRelease(); } catch (e) { pushError("release", e); }
+  }
   if (v.seg && v.seg.t1 === null) v.seg.t1 = Date.now();
   v.busy = false; v.midi = null; v.seg = null;
 }
