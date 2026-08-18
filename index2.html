@@ -154,7 +154,10 @@
   </div>
   <div class="prow"><span>音色</span>
     <select id="selOsc">
-      <option value="triangle" selected>やわらかい</option>
+      <option value="marimba" selected>マリンバ風</option>
+      <option value="gamelan">ガムラン風</option>
+      <option value="sanshin">三線風</option>
+      <option value="triangle">やわらかい</option>
       <option value="sine">まるい</option>
       <option value="square">くっきり</option>
       <option value="sawtooth">ざらつく</option>
@@ -168,7 +171,8 @@
   </div>
   <div class="prow"><span>鳴り方</span>
     <select id="selEnv">
-      <option value="now" selected>滲む</option>
+      <option value="auto" selected>音色にまかせる</option>
+      <option value="now">滲む</option>
       <option value="pluck">弾く</option>
       <option value="pad">伸びる</option>
       <option value="dot">点</option>
@@ -248,6 +252,27 @@ var ENV_PRESETS = {
   dot:   { attack: 0.001, decay: 0.05, sustain: 0,    release: 0.08 }
 };
 
+/* 音色 — 波形・倍音比・鳴り方・音量をひとまとめにする。
+   harm（倍音比）が整数だと楽器らしい音、整数でないと金属的な音になる */
+var TIMBRES = {
+  marimba:     { osc: "fmsine", harm: 4,   mod: 2.2,
+                 env: { attack: 0.001, decay: 0.55, sustain: 0, release: 0.6 }, db: -9  },
+  gamelan:     { osc: "fmsine", harm: 3.4, mod: 6,
+                 env: { attack: 0.002, decay: 2.2,  sustain: 0, release: 2.4 }, db: -15 },
+  sanshin:     { osc: "sawtooth4",
+                 env: { attack: 0.001, decay: 0.85, sustain: 0, release: 0.5 }, db: -14 },
+  triangle:    { osc: "triangle" },
+  sine:        { osc: "sine" },
+  square:      { osc: "square",      db: -14 },
+  sawtooth:    { osc: "sawtooth",    db: -13 },
+  sawtooth4:   { osc: "sawtooth4",   db: -12 },
+  fatsawtooth: { osc: "fatsawtooth", db: -14 },
+  fattriangle: { osc: "fattriangle" },
+  pwm:         { osc: "pwm",         db: -13 },
+  fmsine:      { osc: "fmsine" },
+  amtriangle:  { osc: "amtriangle" }
+};
+
 /* ==================================================================
    状態
 ================================================================== */
@@ -290,31 +315,42 @@ function hhmmss(t) {
 /* ==================================================================
    音 — 装置のノートをそのまま鳴らす（音源16個）
 ================================================================== */
-function currentOsc() {
+function currentTimbre() {
   var el = document.getElementById("selOsc");
-  return (el && el.value) ? el.value : "triangle";
+  return TIMBRES[(el && el.value) ? el.value : "marimba"] || TIMBRES.triangle;
 }
 function currentEnv() {
   var el = document.getElementById("selEnv");
-  return ENV_PRESETS[(el && el.value) ? el.value : "now"] || ENV_PRESETS.now;
+  var key = (el && el.value) ? el.value : "auto";
+  if (key === "auto") return currentTimbre().env || ENV_PRESETS.now;
+  return ENV_PRESETS[key] || ENV_PRESETS.now;
 }
 function buildAudio() {
   limiter = new Tone.Limiter(LIMITER_DB).toDestination();
   for (var i = 0; i < VOICE_COUNT; i++) {
-    var s = new Tone.Synth({ oscillator: { type: currentOsc() }, envelope: currentEnv() });
-    s.volume.value = VOICE_DB;
+    var s = new Tone.Synth({ oscillator: { type: "triangle" }, envelope: ENV_PRESETS.now });
     s.connect(limiter);
     voices.push({ synth: s, midi: null, at: 0, seg: null, busy: false });
   }
   audioReady = true;
+  applyTone();
   applyVoiceLimit();
 }
 function applyTone() {
   if (!audioReady) return;
-  var t = currentOsc(), e = currentEnv();
+  var tb = currentTimbre(), e = currentEnv();
   for (var i = 0; i < voices.length; i++) {
+    var o = voices[i].synth.oscillator;
     try {
-      voices[i].synth.oscillator.type  = t;
+      o.type = tb.osc;
+      // 倍音比は fm/am 系の波形にしか無い。無い場合は黙って飛ばす
+      if (tb.harm !== undefined && o.harmonicity && o.harmonicity.value !== undefined) {
+        o.harmonicity.value = tb.harm;
+      }
+      if (tb.mod !== undefined && o.modulationIndex && o.modulationIndex.value !== undefined) {
+        o.modulationIndex.value = tb.mod;
+      }
+      voices[i].synth.volume.value    = (tb.db === undefined) ? VOICE_DB : tb.db;
       voices[i].synth.envelope.attack  = e.attack;
       voices[i].synth.envelope.decay   = e.decay;
       voices[i].synth.envelope.sustain = e.sustain;
