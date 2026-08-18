@@ -5,18 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>触れると鳴る</title>
 <style>
-  html, body {
-    margin: 0; padding: 0; height: 100%;
-    background: #07090c; color: #cfd4da; overflow: hidden;
+  html { height: 100%; }
+  body {
+    margin: 0; padding: 0; min-height: 100%;
+    background: #07090c; color: #cfd4da;
     font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
     -webkit-tap-highlight-color: transparent;
     -webkit-user-select: none; user-select: none;
+    -webkit-overflow-scrolling: touch;
   }
-  #cv { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  /* 絵は背景に固定し、その上を縦にスクロールさせる */
+  #cv { position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
 
-  /* 未接続のときだけ出るボタン */
+  .screen {
+    position: relative; z-index: 1;
+    height: 100vh; height: 100dvh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
   #btnStart {
-    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
     min-width: 168px; min-height: 60px; padding: 12px 26px;
     font-size: 17px; font-family: inherit; letter-spacing: .18em;
     color: #cfd4da; background: rgba(255,255,255,.04);
@@ -26,61 +32,83 @@
 
   /* 触れているかどうかだけを言葉で置く。数値は持たない（D-23） */
   #hint {
-    position: fixed; left: 0; right: 0; bottom: 26px; text-align: center;
-    font-size: 13px; letter-spacing: .22em; color: rgba(207,212,218,.5);
-    pointer-events: none; transition: opacity 900ms ease;
+    position: absolute; left: 0; right: 0; bottom: 88px; text-align: center;
+    font-size: 14px; letter-spacing: .3em; color: rgba(207,212,218,.6);
+    pointer-events: none; transition: opacity 700ms ease, color 700ms ease;
+  }
+  #scrollCue {
+    position: absolute; left: 0; right: 0; bottom: 26px; text-align: center;
+    font-size: 12px; letter-spacing: .2em; color: rgba(207,212,218,.34);
+    pointer-events: none;
   }
 
-  #btnPanel {
-    position: fixed; right: 14px; bottom: 14px; width: 44px; height: 44px;
-    border-radius: 22px; border: 1px solid rgba(255,255,255,.16);
-    background: rgba(255,255,255,.04); color: #8b939c;
-    font-size: 17px; line-height: 1; font-family: inherit;
+  .settings {
+    position: relative; z-index: 1;
+    background: #090c10; border-top: 1px solid rgba(255,255,255,.1);
+    padding: 22px 16px 56px;
   }
-  #btnPanel:active { background: rgba(255,255,255,.12); }
-
-  #panel {
-    position: fixed; left: 0; right: 0; bottom: 0;
-    display: none; padding: 14px 16px 74px;
-    background: rgba(7,9,12,.95); border-top: 1px solid rgba(255,255,255,.12);
-    max-height: 74vh; overflow-y: auto;
-    -webkit-user-select: text; user-select: text;
+  .settings h2 {
+    margin: 0 0 14px; font-size: 12px; font-weight: normal;
+    letter-spacing: .24em; color: #6d757e;
   }
-  #panel.open { display: block; }
-  .prow { display: flex; gap: 10px; align-items: center; margin: 0 0 8px; }
+  .prow { display: flex; gap: 10px; align-items: center; margin: 0 0 10px; }
   .prow span { flex: 0 0 4.5em; font-size: 12.5px; color: #767f89; letter-spacing: .08em; }
   select {
-    flex: 1 1 auto; min-height: 44px; padding: 8px 10px; font-size: 14px;
+    flex: 1 1 auto; min-height: 46px; padding: 8px 10px; font-size: 15px;
     font-family: inherit; color: #dfe4ea; background: rgba(255,255,255,.05);
     border: 1px solid rgba(255,255,255,.16); border-radius: 8px;
   }
-  #panel hr { border: 0; border-top: 1px solid rgba(255,255,255,.1); margin: 14px 0 10px; }
-  #panel dl {
+  .settings hr { border: 0; border-top: 1px solid rgba(255,255,255,.1); margin: 20px 0 12px; }
+  dl {
     margin: 0; display: grid; grid-template-columns: 8.5em 1fr; gap: 2px 10px;
     font-size: 13px; line-height: 1.7; font-variant-numeric: tabular-nums;
+    -webkit-user-select: text; user-select: text;
   }
-  #panel dt { color: #767f89; }
-  #panel dd { margin: 0; color: #dfe4ea; word-break: break-all; }
-  #panel dd.err { color: #ff9d9d; }
+  dt { color: #767f89; }
+  dd { margin: 0; color: #dfe4ea; word-break: break-all; }
+  dd.err { color: #ff9d9d; }
 </style>
 </head>
 <body>
 
 <canvas id="cv"></canvas>
-<button id="btnStart">はじまる</button>
-<div id="hint"></div>
-<button id="btnPanel" aria-label="設定">⌃</button>
 
-<div id="panel">
+<section class="screen">
+  <button id="btnStart">はじまる</button>
+  <div id="hint"></div>
+  <div id="scrollCue">⌄　設定はこの下</div>
+</section>
+
+<section class="settings">
+  <h2>音</h2>
   <div class="prow"><span>音階</span>
     <select id="selScale">
       <option value="mixolydian" selected>ミクソリディアン</option>
       <option value="raw">そのまま（丸めない）</option>
+      <option value="dorian">ドリアン</option>
+      <option value="lydian">リディアン</option>
+      <option value="altered">オルタード</option>
       <option value="ritsu">律旋法</option>
       <option value="major">長音階</option>
       <option value="minor">短音階</option>
       <option value="pentaMajor">ペンタトニック（明）</option>
       <option value="pentaMinor">ペンタトニック（暗）</option>
+    </select>
+  </div>
+  <div class="prow"><span>キー</span>
+    <select id="selRoot">
+      <option value="0" selected>C</option>
+      <option value="1">C♯ / D♭</option>
+      <option value="2">D</option>
+      <option value="3">D♯ / E♭</option>
+      <option value="4">E</option>
+      <option value="5">F</option>
+      <option value="6">F♯ / G♭</option>
+      <option value="7">G</option>
+      <option value="8">G♯ / A♭</option>
+      <option value="9">A</option>
+      <option value="10">A♯ / B♭</option>
+      <option value="11">B</option>
     </select>
   </div>
   <div class="prow"><span>音色</span>
@@ -125,7 +153,7 @@
     <dt>毎秒の受信</dt>   <dd id="vRate">0 件/秒</dd>
     <dt>エラー</dt>       <dd id="vErr" class="err">—</dd>
   </dl>
-</div>
+</section>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
 <script>
@@ -151,6 +179,9 @@ var MIDI_CHAR    = "7772e5db-3868-4112-a1a9-f2669d106bf3";
 var SCALES = {
   raw:        null,
   mixolydian: [0,2,4,5,7,9,10],
+  dorian:     [0,2,3,5,7,9,10],
+  lydian:     [0,2,4,6,7,9,11],
+  altered:    [0,1,3,4,6,8,10],
   ritsu:      [0,2,5,7,9],
   major:      [0,2,4,5,7,9,11],
   minor:      [0,2,3,5,7,8,10],
@@ -168,8 +199,8 @@ var ENV_PRESETS = {
    状態
 ================================================================== */
 var elStart = document.getElementById("btnStart");
-var elPanel = document.getElementById("panel");
 var elHint  = document.getElementById("hint");
+var elCue   = document.getElementById("scrollCue");
 var cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 
 var device = null, state = "未接続";
@@ -181,7 +212,7 @@ var ccHist = [];      // CCの帯 {t, v}
 var lastNoteAt = 0, lastRecvAt = 0;
 var lastCcVal = null;
 var rateWindow = [];
-var glow = 0;         // 画面の明るさ（0..1）。触れていると上がる
+var glow = 0;         // 0（沈黙）〜1（鳴っている）
 
 /* ==================================================================
    エラーは握りつぶさない
@@ -249,13 +280,16 @@ document.getElementById("selOsc").addEventListener("change", applyTone);
 document.getElementById("selEnv").addEventListener("change", applyTone);
 document.getElementById("selVoices").addEventListener("change", applyVoiceLimit);
 
-/* 音階 — 鳴らす高さだけ丸める（層B。D-22） */
+/* 音階とキー — 鳴らす高さだけ丸める（層B。D-22） */
 function quantize(m) {
   var el = document.getElementById("selScale");
   var sc = SCALES[(el && el.value) ? el.value : "mixolydian"];
-  if (!sc) return m;
-  var pc = ((m % 12) + 12) % 12, base = m - pc;
-  for (var i = 0; i < sc.length; i++) if (sc[i] >= pc) return base + sc[i];
+  if (!sc) return m;                                   // そのまま
+  var rt = document.getElementById("selRoot");
+  var root = rt ? parseInt(rt.value, 10) : 0;
+  var rel  = ((m - root) % 12 + 12) % 12;              // キーからの距離
+  var base = m - rel;
+  for (var i = 0; i < sc.length; i++) if (sc[i] >= rel) return base + sc[i];
   return base + 12 + sc[0];
 }
 function midiToFreq(m) { return Tone.Frequency(m, "midi").toFrequency(); }
@@ -315,6 +349,7 @@ function fit() {
   ctx.setTransform(r, 0, 0, r, 0, 0);
 }
 window.addEventListener("resize", fit);
+window.addEventListener("orientationchange", fit);
 
 function yOf(midi, h) {
   var r = (midi - MIDI_LO) / (MIDI_HI - MIDI_LO);
@@ -329,17 +364,19 @@ function draw() {
 
   // 触れているか（Note Onが途切れていないか）
   var touching = (now - lastNoteAt) < QUIET_MS;
-  var target = touching ? 1 : 0;
-  glow += (target - glow) * 0.045;          // ゆっくり追従させる＝沈黙が見える
+  glow += ((touching ? 1 : 0) - glow) * 0.05;   // ゆっくり追従＝沈黙が見える
 
   // 地
   ctx.fillStyle = "#07090c";
   ctx.fillRect(0, 0, w, h);
-  var bg = ctx.createRadialGradient(w / 2, h * 0.52, 0, w / 2, h * 0.52, Math.max(w, h) * 0.72);
-  bg.addColorStop(0, "rgba(46,86,72," + (0.30 * glow).toFixed(3) + ")");
+  var bg = ctx.createRadialGradient(w / 2, h * 0.5, 0, w / 2, h * 0.5, Math.max(w, h) * 0.78);
+  bg.addColorStop(0, "rgba(58,116,94," + (0.60 * glow).toFixed(3) + ")");
+  bg.addColorStop(0.55, "rgba(30,62,52," + (0.30 * glow).toFixed(3) + ")");
   bg.addColorStop(1, "rgba(7,9,12,0)");
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
+
+  var dim = 0.32 + 0.68 * glow;      // 沈黙のとき、絵ぜんたいが暗く沈む
 
   // CC80 — 連続の帯（下から）
   while (ccHist.length && now - ccHist[0].t > SPAN_MS) ccHist.shift();
@@ -352,7 +389,7 @@ function draw() {
     }
     ctx.lineTo(w - (now - ccHist[ccHist.length - 1].t) * pxPerMs, h);
     ctx.closePath();
-    ctx.fillStyle = "rgba(90,150,170,.16)";
+    ctx.fillStyle = "rgba(90,150,170," + (0.20 * (0.5 + 0.5 * glow)).toFixed(3) + ")";
     ctx.fill();
   }
 
@@ -366,7 +403,7 @@ function draw() {
     var x2 = w - (now - end) * pxPerMs;
     var y  = yOf(s.midi, h);
     var age = (now - end) / SPAN_MS;          // 0（新しい）〜1（消える）
-    var a   = (1 - age) * (s.t1 === null ? 0.95 : 0.72);
+    var a   = (1 - age) * (s.t1 === null ? 0.95 : 0.72) * dim;
     ctx.strokeStyle = "rgba(214,238,226," + a.toFixed(3) + ")";
     ctx.lineWidth = (s.t1 === null) ? 3.2 : 2.4;
     ctx.beginPath();
@@ -374,9 +411,9 @@ function draw() {
     ctx.lineTo(Math.max(x2, x1 + 1.5), y);
     ctx.stroke();
     if (s.t1 === null) {                       // 鳴っている音の先端
-      ctx.fillStyle = "rgba(236,250,243," + (0.8 * (0.55 + 0.45 * glow)).toFixed(3) + ")";
+      ctx.fillStyle = "rgba(236,250,243," + (0.9 * dim).toFixed(3) + ")";
       ctx.beginPath();
-      ctx.arc(x2, y, 3.6, 0, Math.PI * 2);
+      ctx.arc(x2, y, 3.8, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -492,11 +529,6 @@ function onDisconnected() {
 }
 elStart.addEventListener("click", start);
 
-document.getElementById("btnPanel").addEventListener("click", function () {
-  elPanel.classList.toggle("open");
-  this.textContent = elPanel.classList.contains("open") ? "⌄" : "⌃";
-});
-
 /* ==================================================================
    見張りと表示
 ================================================================== */
@@ -506,18 +538,23 @@ setInterval(function () {
 
   if (state === "受信中" && now - lastRecvAt > SILENCE_MS) { state = "待っている"; stopAll(); }
 
-  if (state === "未接続" || state === "接続中") elHint.textContent = "";
-  else if ((now - lastNoteAt) < QUIET_MS)       elHint.textContent = "鳴っている";
-  else                                          elHint.textContent = "沈黙";
-  elHint.style.opacity = (state === "未接続") ? 0 : 1;
-
-  if (elPanel.classList.contains("open")) {
-    document.getElementById("vConn").textContent =
-      state + (device && device.name ? "（" + device.name + "）" : "");
-    document.getElementById("vNow").textContent  = busyCount();
-    document.getElementById("vCC").textContent   = (lastCcVal === null) ? "—" : ("CC80 = " + lastCcVal);
-    document.getElementById("vRate").textContent = rateWindow.length + " 件/秒";
+  var connected = (state !== "未接続" && state !== "接続中");
+  if (!connected) {
+    elHint.textContent = "";
+  } else if ((now - lastNoteAt) < QUIET_MS) {
+    elHint.textContent = "鳴っている";
+    elHint.style.color = "rgba(214,238,226,.92)";
+  } else {
+    elHint.textContent = "沈黙";
+    elHint.style.color = "rgba(207,212,218,.34)";
   }
+  elCue.style.opacity = connected ? 1 : 0.5;
+
+  document.getElementById("vConn").textContent =
+    state + (device && device.name ? "（" + device.name + "）" : "");
+  document.getElementById("vNow").textContent  = busyCount();
+  document.getElementById("vCC").textContent   = (lastCcVal === null) ? "—" : ("CC80 = " + lastCcVal);
+  document.getElementById("vRate").textContent = rateWindow.length + " 件/秒";
 }, 200);
 
 fit();
