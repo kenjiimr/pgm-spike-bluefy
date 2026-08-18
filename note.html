@@ -19,6 +19,10 @@
            background:#263040; color:#e8e8e8; -webkit-tap-highlight-color:transparent; }
   button:active { background:#34425a; }
   button.sub { background:#1c2026; color:#9aa0a6; flex:0 1 auto; min-height:40px; font-size:13px; }
+    select { flex:1 1 auto; min-height:44px; padding:8px 10px; font-size:14px;
+           font-family:inherit; border:1px solid #3a4048; border-radius:8px;
+           background:#263040; color:#e8e8e8; }
+  .lbl { font-size:12px; color:#9aa0a6; align-self:center; flex:0 0 auto; }
   #btnStart { width:100%; min-height:72px; font-size:17px; font-weight:bold; background:#2f5d3a; }
   #btnPhase { width:100%; min-height:64px; font-size:16px; font-weight:bold; }
   #btnPhase.touching { background:#2f5d3a; border-color:#4a8a5c; }
@@ -62,6 +66,32 @@
 </div>
 
 <button id="btnPhase" class="away">いま: 離している<br><span style="font-size:12px;font-weight:normal">タップで「触れている」に切り替わります</span></button>
+
+<h2>音色</h2>
+<div class="row">
+  <span class="lbl">波形</span>
+  <select id="selOsc">
+    <option value="triangle">やわらかい（今の音）</option>
+    <option value="sine">まるい</option>
+    <option value="square">くっきり</option>
+    <option value="sawtooth">ざらつく</option>
+    <option value="sawtooth4">ざらつき控えめ</option>
+    <option value="fatsawtooth">厚い（少しずれた音を重ねる）</option>
+    <option value="fattriangle">厚くやわらかい</option>
+    <option value="pwm">ゆらぐ</option>
+    <option value="fmsine">金属的</option>
+    <option value="amtriangle">震える</option>
+  </select>
+</div>
+<div class="row">
+  <span class="lbl">鳴り方</span>
+  <select id="selEnv">
+    <option value="now">滲む（今の設定）</option>
+    <option value="pluck">弾く（立ち上がりが速く、すぐ消える）</option>
+    <option value="pad">伸びる（ゆっくり立ち上がり、長く残る）</option>
+    <option value="dot">点（ごく短く切る）</option>
+  </select>
+</div>
 
 <div class="row">
   <button id="btnReset" class="sub">集計をリセット</button>
@@ -110,7 +140,12 @@ var VOICE_COUNT = 16;
 var VOICE_DB    = -10;
 var LIMITER_DB  = -6;
 var LOG_MAX     = 60;
-
+var ENV_PRESETS = {
+  now:   { attack: 0.02,  decay: 0.25, sustain: 0.25, release: 1.2  },
+  pluck: { attack: 0.002, decay: 0.12, sustain: 0,    release: 0.25 },
+  pad:   { attack: 0.35,  decay: 0.5,  sustain: 0.7,  release: 2.5  },
+  dot:   { attack: 0.001, decay: 0.05, sustain: 0,    release: 0.08 }
+};
 var TS_WRAP     = 8192;    // 装置の時刻カウンタは13ビット
 var TS_RESYNC   = 4000;
 
@@ -189,8 +224,8 @@ function buildAudio() {
   limiter = new Tone.Limiter(LIMITER_DB).toDestination();
   for (var i = 0; i < VOICE_COUNT; i++) {
     var s = new Tone.Synth({
-      oscillator: { type: "triangle" },
-      envelope: { attack: 0.02, decay: 0.25, sustain: 0.25, release: 1.2 }
+      oscillator: { type: currentOsc() },
+      envelope: currentEnv()
     });
     s.volume.value = VOICE_DB;
     s.connect(limiter);
@@ -198,6 +233,34 @@ function buildAudio() {
   }
   audioReady = true;
 }
+
+/* ==================================================================
+   音色 — 選択を今鳴っている音源すべてへ反映する
+================================================================== */
+function currentOsc() {
+  var el = document.getElementById("selOsc");
+  return (el && el.value) ? el.value : "triangle";
+}
+function currentEnv() {
+  var el = document.getElementById("selEnv");
+  var key = (el && el.value) ? el.value : "now";
+  return ENV_PRESETS[key] || ENV_PRESETS.now;
+}
+function applyTone() {
+  if (!audioReady) return;              // 「はじまる」前は選択だけ保持する
+  var t = currentOsc(), e = currentEnv();
+  for (var i = 0; i < voices.length; i++) {
+    try {
+      voices[i].synth.oscillator.type   = t;
+      voices[i].synth.envelope.attack   = e.attack;
+      voices[i].synth.envelope.decay    = e.decay;
+      voices[i].synth.envelope.sustain  = e.sustain;
+      voices[i].synth.envelope.release  = e.release;
+    } catch (err) { pushError("applyTone", err); }
+  }
+}
+document.getElementById("selOsc").addEventListener("change", applyTone);
+document.getElementById("selEnv").addEventListener("change", applyTone);
 
 function busyCount() {
   var n = 0;
