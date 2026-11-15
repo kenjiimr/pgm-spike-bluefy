@@ -108,6 +108,29 @@
   dd { margin: 0; color: #aab2bb; word-break: break-all; }
   dd.err { color: #d98d8d; }
   .credit { margin: 22px 0 0; font-size: 10.5px; color: #4f575f; letter-spacing: .04em; }
+
+  /* 覗く — 翻訳の工程を画面に重ねる（D-25）。既定は閉じている */
+  #peekBtn {
+    position: absolute; right: 14px; top: calc(env(safe-area-inset-top, 0px) + 10px);
+    font-family: inherit; font-size: 12px; letter-spacing: .2em; color: #cfd4da;
+    background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.2);
+    border-radius: 16px; padding: 6px 12px;
+  }
+  #peekBtn[aria-pressed="true"] { background: rgba(236,196,140,.16); border-color: rgba(236,196,140,.6); }
+
+  /* 設定を2群に分ける — 植物から来るもの（層A）／人が加えるもの（層B） */
+  .settings h2.grp { margin-top: 26px; color: #8a929b; }
+  .settings h2.grp:first-child { margin-top: 0; }
+  .settings p.note { margin: 0 0 4px; font-size: 12px; color: #626a73; line-height: 1.7; }
+  .arow { display: flex; align-items: center; padding: 13px 0; border-bottom: 1px solid rgba(255,255,255,.055); }
+  .arow > span { flex: 0 0 auto; font-size: 13px; color: #79818a; letter-spacing: .14em; }
+  .arow > em { flex: 1 1 auto; text-align: right; font-style: normal; font-size: 13px; color: #aab2bb; }
+  .gA .arow > span::before, .gB .prow > span::before, .gB .srow > span::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 8px; vertical-align: 1px; box-sizing: border-box;
+  }
+  .gA .arow > span::before { background: rgb(214,238,226); }
+  .gB .prow > span::before, .gB .srow > span::before { border: 1px solid rgb(236,196,140); }
 </style>
 </head>
 <body>
@@ -118,10 +141,23 @@
   <button id="btnStart">はじまる</button>
   <div id="hint"></div>
   <div id="scrollCue">⌄　設定はこの下</div>
+  <button id="peekBtn" aria-pressed="false">覗く</button>
 </section>
 
 <section class="settings">
-  <h2>音</h2>
+  <div class="gA">
+  <h2 class="grp">植物から来るもの</h2>
+  <p class="note">変えられない。そのまま鳴らし、そのまま描く。</p>
+  <div class="arow"><span>鳴る瞬間</span><em>そのまま</em></div>
+  <div class="arow"><span>音の長さ</span><em>そのまま</em></div>
+  <div class="arow"><span>重なり</span><em>そのまま</em></div>
+  <div class="arow"><span>高さの元</span><em>そのまま（下で丸める）</em></div>
+  <div class="arow"><span>CC80</span><em>描くだけ・音にしない</em></div>
+  </div>
+
+  <div class="gB">
+  <h2 class="grp">人が加えるもの</h2>
+  <p class="note">加えた分は「覗く」で画面に出る。</p>
   <div class="prow"><span>音階</span>
     <select id="selScale">
       <option value="mixolydian" selected>ミクソリディアン</option>
@@ -203,6 +239,7 @@
     <input type="range" id="rngOct" min="1" max="5" step="1" value="2">
     <b id="vOct">2</b>
   </div>
+  </div>
 
   <hr>
   <dl>
@@ -210,6 +247,7 @@
     <dt>いま鳴っている</dt><dd id="vNow">0</dd>
     <dt>届いている値</dt> <dd id="vCC">—</dd>
     <dt>毎秒の受信</dt>   <dd id="vRate">0 件/秒</dd>
+  <dt>鳴らした音</dt>   <dd id="vCount">0（届いた 0）</dd>
     <dt>音源</dt>         <dd id="vSamp">—</dd>
     <dt>エラー</dt>       <dd id="vErr" class="err">—</dd>
   </dl>
@@ -306,6 +344,11 @@ var lastCcVal = null;
 var rateWindow = [];
 var glow = 0;         // 0（沈黙）〜1（鳴っている）
 var lastPlayAt = 0;   // 間引きの判定に使う
+var ripples = [];     // 波紋 — 鳴った音の線をそのまま参照する
+var thinned = [];     // 間引いた音 {t, m}（覗くときだけ描く）
+var lastRec = null;   // 最後に届いた1音の翻訳の記録 {raw, folded, played, thin}
+var recvNotes = 0, playedNotes = 0;
+var peek = false;
 
 /* ==================================================================
    エラーは握りつぶさない
@@ -546,15 +589,24 @@ function noteOn(midi, vel) {
   if (!audioReady) return;
   var now = Date.now();
   if (voiceKind === "sampler" && !samplerReady) return;   // 読み込み前は鳴らさない
-  if (now - lastPlayAt < minGap()) return;      // 密度: 間引く
+  recvNotes++;
+  var folded = fold(midi);
+  var played = quantize(folded);
+  if (now - lastPlayAt < minGap()) {            // 密度: 間引く（覗くときだけ×で見せる）
+    thinned.push({ t: now, m: folded });
+    lastRec = { raw: midi, folded: folded, played: played, thin: true };
+    return;
+  }
   lastPlayAt = now;
   var v = takeVoice();
-  var played = quantize(fold(midi));
   v.freq = midiToFreq(played);
   try { v.synth.triggerAttack(v.freq, undefined, (vel || 100) / 127); }
   catch (e) { pushError("noteOn", e); return; }
-  var seg = { midi: played, t0: now, t1: null };
+  var seg = { midi: played, f: folded, t0: now, t1: null };
   segs.push(seg);
+  ripples.push(seg);
+  lastRec = { raw: midi, folded: folded, played: played, thin: false };
+  playedNotes++;
   v.midi = midi; v.at = now; v.seg = seg; v.busy = true;
   lastNoteAt = now;
 }
@@ -590,12 +642,22 @@ function yOf(midi, h) {
   var r = (midi - lo) / (hi - lo);
   if (r < 0) r = 0;
   if (r > 1) r = 1;
-  return (h * 0.86) - r * (h * 0.72);      // 高い音ほど上
+  return (h * 0.82) - r * (h * 0.62);      // 高い音ほど上。上に工程の帯の余白を残す
+}
+
+var LEAF = "214,238,226", THREAD = "236,196,140", GREY = "150,158,166";
+var NAMES = ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"];
+function nn(m) { return NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1); }
+function rgba(c, a) { return "rgba(" + c + "," + Math.max(0, a).toFixed(3) + ")"; }
+function midiRange() {
+  var n = octaves();
+  return (n >= 5) ? [MIDI_LO, MIDI_HI] : [FOLD_LO, FOLD_LO + 12 * n];
 }
 
 function draw() {
   var w = cv.clientWidth, h = cv.clientHeight, now = Date.now();
-  var pxPerMs = w / SPAN_MS;
+  var pxPerMs = w / SPAN_MS, nowX = w * 0.88;   // 右端に波紋の余白を残す
+  function X(t) { return nowX - (now - t) * pxPerMs; }
 
   // 触れているか（Note Onが途切れていないか）
   var touching = (now - lastNoteAt) < QUIET_MS;
@@ -613,29 +675,48 @@ function draw() {
 
   var dim = 0.32 + 0.68 * glow;      // 沈黙のとき、絵ぜんたいが暗く沈む
 
-  // CC80 — 連続の帯（下から）
+  // 覗く: 音階の格子（層B＝器）
+  if (peek) {
+    var rg = midiRange(), sc = SCALES[document.getElementById("selScale").value];
+    ctx.font = "9px -apple-system, sans-serif"; ctx.textAlign = "left";
+    for (var m = rg[0]; m <= rg[1]; m++) {
+      if (sc && quantize(m) !== m) continue;
+      if (!sc && m % 12 !== 0) continue;           // 丸めないときはCだけ目盛りにする
+      var gy = yOf(m, h);
+      ctx.strokeStyle = rgba(THREAD, 0.10); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+      ctx.fillStyle = rgba(THREAD, 0.45); ctx.fillText(nn(m), 4, gy - 2);
+    }
+  }
+
+  // CC80 — 連続の帯（下から）。描くだけで音にしない
   while (ccHist.length && now - ccHist[0].t > SPAN_MS) ccHist.shift();
   if (ccHist.length > 1) {
     ctx.beginPath();
-    ctx.moveTo(w - (now - ccHist[0].t) * pxPerMs, h);
+    ctx.moveTo(X(ccHist[0].t), h);
     for (var i = 0; i < ccHist.length; i++) {
       var p = ccHist[i];
-      ctx.lineTo(w - (now - p.t) * pxPerMs, h - (p.v / CC_MAX) * (h * 0.16) - 2);
+      ctx.lineTo(X(p.t), h - (p.v / CC_MAX) * (h * 0.16) - 2);
     }
-    ctx.lineTo(w - (now - ccHist[ccHist.length - 1].t) * pxPerMs, h);
+    ctx.lineTo(X(ccHist[ccHist.length - 1].t), h);
     ctx.closePath();
     ctx.fillStyle = "rgba(90,150,170," + (0.20 * (0.5 + 0.5 * glow)).toFixed(3) + ")";
     ctx.fill();
+    if (peek) {
+      ctx.fillStyle = "rgba(120,180,200,.6)"; ctx.font = "9px -apple-system, sans-serif"; ctx.textAlign = "left";
+      ctx.fillText("CC80（描くだけ・音にしない）", 6, h - h * 0.16 - 8);
+    }
   }
 
   // Note — 離散の線。長さがそのまま横の長さになる
+  // A 残差の糸 — 丸める前の高さ（白抜きの点）から、鳴らした高さまでを結ぶ
   ctx.lineCap = "round";
   for (var k = segs.length - 1; k >= 0; k--) {
     var s = segs[k];
     var end = (s.t1 === null) ? now : s.t1;
     if (now - end > SPAN_MS) { segs.splice(k, 1); continue; }
-    var x1 = w - (now - s.t0) * pxPerMs;
-    var x2 = w - (now - end) * pxPerMs;
+    var x1 = X(s.t0);
+    var x2 = X(end);
     var y  = yOf(s.midi, h);
     var age = (now - end) / SPAN_MS;          // 0（新しい）〜1（消える）
     var a   = (1 - age) * (s.t1 === null ? 0.95 : 0.72) * dim;
@@ -645,6 +726,13 @@ function draw() {
     ctx.moveTo(x1, y);
     ctx.lineTo(Math.max(x2, x1 + 1.5), y);
     ctx.stroke();
+    if (s.f !== undefined && s.f !== s.midi) {
+      var yr = yOf(s.f, h);
+      ctx.strokeStyle = rgba(THREAD, a * (peek ? 0.95 : 0.5)); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x1, yr);
+      ctx.quadraticCurveTo(x1 - 6, (yr + y) / 2, x1, y); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x1, yr, 2.6, 0, Math.PI * 2); ctx.stroke();
+    }
     if (s.t1 === null) {                       // 鳴っている音の先端
       ctx.fillStyle = "rgba(236,250,243," + (0.9 * dim).toFixed(3) + ")";
       ctx.beginPath();
@@ -653,8 +741,69 @@ function draw() {
     }
   }
 
+  // B 波紋 — 鳴った瞬間から広がる。大きさ＝音の長さ
+  for (var j = ripples.length - 1; j >= 0; j--) {
+    var sg = ripples[j];
+    var dur = ((sg.t1 === null) ? now : sg.t1) - sg.t0;
+    var life = Math.min(4000, dur + 1200), rAge = now - sg.t0;
+    if (rAge > life) { ripples.splice(j, 1); continue; }
+    var q = rAge / life, rad = 5 + q * (12 + dur / 2500 * 46);
+    ctx.strokeStyle = rgba(LEAF, (1 - q) * 0.5 * dim); ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(X(sg.t0), yOf(sg.midi, h), rad, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // 覗く: 間引いた音（×）と、翻訳の工程
+  while (thinned.length && now - thinned[0].t > SPAN_MS) thinned.shift();
+  if (peek) {
+    ctx.strokeStyle = rgba(THREAD, 0.5); ctx.lineWidth = 1;
+    for (var n = 0; n < thinned.length; n++) {
+      var tx = X(thinned[n].t), ty = yOf(thinned[n].m, h);
+      ctx.beginPath(); ctx.moveTo(tx - 3, ty - 3); ctx.lineTo(tx + 3, ty + 3);
+      ctx.moveTo(tx + 3, ty - 3); ctx.lineTo(tx - 3, ty + 3); ctx.stroke();
+    }
+    drawPipeline(w, touching);
+  }
+
   requestAnimationFrame(draw);
 }
+
+/* 翻訳の工程（D-25）。最後に届いた1音が、どの工程でどう変わったか */
+function drawPipeline(w, touching) {
+  var L = lastRec, n = 5, gap = 4, bh = 44;
+  var top = Math.max(8, elPeek.getBoundingClientRect().bottom + 8);
+  var bw = (w - 16 - gap * (n - 1)) / n;
+  var connected = (state !== "未接続" && state !== "接続中");
+  var st = [
+    { k: "植物",   sub: "源",           c: LEAF,   v: !connected ? "未接続" : (touching ? "触れている" : "離れている") },
+    { k: "装置",   sub: "中は一部未知", c: GREY,   v: L ? nn(L.raw) : "—" },
+    { k: "間引く", sub: "人の手",       c: THREAD, v: L ? (L.thin ? "間引いた" : "通す") : "—" },
+    { k: "畳む",   sub: "人の手",       c: THREAD, v: L ? nn(L.folded) : "—" },
+    { k: "丸める", sub: "人の手",       c: THREAD, v: L ? (L.thin ? "—" : nn(L.played)) : "—" }
+  ];
+  ctx.fillStyle = "rgba(7,9,12,.72)"; ctx.fillRect(0, top - 6, w, bh + 40);
+  ctx.textAlign = "center";
+  for (var i = 0; i < n; i++) {
+    var x = 8 + i * (bw + gap), s = st[i];
+    ctx.strokeStyle = rgba(s.c, 0.7); ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, top + 0.5, bw - 1, bh - 1);
+    ctx.fillStyle = rgba(s.c, 0.95); ctx.font = "11px -apple-system, sans-serif";
+    ctx.fillText(s.k, x + bw / 2, top + 14);
+    ctx.fillStyle = "#e6ebf0"; ctx.font = "11.5px -apple-system, sans-serif";
+    ctx.fillText(s.v, x + bw / 2, top + 29);
+    ctx.fillStyle = rgba(s.c, 0.6); ctx.font = "8.5px -apple-system, sans-serif";
+    ctx.fillText(s.sub, x + bw / 2, top + 40);
+  }
+  ctx.textAlign = "left"; ctx.font = "10px -apple-system, sans-serif"; ctx.fillStyle = "rgba(207,212,218,.6)";
+  ctx.fillText("届いた " + recvNotes + "　鳴らした " + playedNotes + "　／ 糸＝丸める前→後のずれ", 8, top + bh + 18);
+}
+
+/* 覗くの開閉 — ボタンか、絵のどこかをタップ */
+var elPeek = document.getElementById("peekBtn");
+function togglePeek() { peek = !peek; elPeek.setAttribute("aria-pressed", String(peek)); }
+elPeek.addEventListener("click", function (e) { e.stopPropagation(); togglePeek(); });
+document.querySelector(".screen").addEventListener("click", function (e) {
+  if (e.target === elStart) return;
+  togglePeek();
+});
 
 /* ==================================================================
    受信（機能1・確定済みの実装をそのまま使う）
@@ -791,6 +940,7 @@ setInterval(function () {
   document.getElementById("vCC").textContent   = (lastCcVal === null) ? "—" : ("CC80 = " + lastCcVal);
   document.getElementById("vRate").textContent = rateWindow.length + " 件/秒";
   document.getElementById("vSamp").textContent = samplerState;
+  document.getElementById("vCount").textContent = playedNotes + "（届いた " + recvNotes + "）";
 }, 200);
 
 fit();
