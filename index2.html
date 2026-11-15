@@ -148,8 +148,8 @@
   <div class="gA">
   <h2 class="grp">植物から来るもの</h2>
   <p class="note">変えられない。そのまま鳴らし、そのまま描く。</p>
-  <div class="arow"><span>鳴る瞬間</span><em>そのまま</em></div>
-  <div class="arow"><span>音の長さ</span><em>そのまま</em></div>
+  <div class="arow"><span>鳴る瞬間</span><em id="aWhen">そのまま</em></div>
+  <div class="arow"><span>音の長さ</span><em id="aLen">そのまま</em></div>
   <div class="arow"><span>重なり</span><em>そのまま</em></div>
   <div class="arow"><span>高さの元</span><em>そのまま（下で丸める）</em></div>
   <div class="arow"><span>CC80</span><em>描くだけ・音にしない</em></div>
@@ -238,6 +238,18 @@
   <div class="srow"><span>音域</span>
     <input type="range" id="rngOct" min="1" max="5" step="1" value="2">
     <b id="vOct">2</b>
+  </div>
+  <div class="prow"><span>リズム</span>
+    <select id="selRhythm">
+      <option value="off" selected>オフ（植物の瞬間のまま）</option>
+      <option value="swing">はねる（タン・タ）</option>
+      <option value="straight">均等な刻み</option>
+      <option value="waltz">3拍子（ワルツ）</option>
+    </select>
+  </div>
+  <div class="srow" id="rowBpm"><span>BPM</span>
+    <input type="range" id="rngBpm" min="20" max="240" step="1" value="72">
+    <b id="vBpm">72</b>
   </div>
   </div>
 
@@ -600,6 +612,13 @@ function noteOn(midi, vel) {
   recvNotes++;
   var folded = fold(midi);
   var played = quantize(folded);
+  if (rhythmOn()) {                             // リズム: 次の拍まで待たせる（D-27）
+    if (pending) thinned.push({ t: pending.at, m: pending.folded });   // 拍に間に合わず入れ替わった音
+    pending = { raw: midi, folded: folded, played: played, at: now };
+    lastRec = { raw: midi, folded: folded, played: played, thin: false, wait: true };
+    lastNoteAt = now;
+    return;
+  }
   if (now - lastPlayAt < minGap()) {            // 密度: 間引く（覗くときだけ×で見せる）
     thinned.push({ t: now, m: folded });
     lastRec = { raw: midi, folded: folded, played: played, thin: true };
@@ -620,6 +639,7 @@ function noteOn(midi, vel) {
 }
 function noteOff(midi) {
   if (!audioReady) return;
+  if (rhythmOn()) return;        // リズムがオンの間、長さは型が決める（装置のNote Offは使わない）
   var target = null;
   for (var i = 0; i < voices.length; i++) {
     var v = voices[i];
@@ -627,6 +647,59 @@ function noteOff(midi) {
   }
   if (target) releaseVoice(target);
 }
+/* ==================================================================
+   リズム — オンのとき、届いた音を次の拍まで待たせ、型の長さで鳴らす（D-27）
+   拍と拍の間に届いた音のうち、最後の1つだけを鳴らす。届かなければその拍は鳴らない
+================================================================== */
+var RHYTHMS = {
+  swing:    [{ len: 2 / 3, vel: 100 }, { len: 1 / 3, vel: 80 }],          // 三連符の1・2つめをつなぐ
+  straight: [{ len: 1 / 2, vel: 100 }, { len: 1 / 2, vel: 85 }],          // 8分音符
+  waltz:    [{ len: 1, vel: 110 }, { len: 1, vel: 75 }, { len: 1, vel: 75 }]  // 3拍子・1拍目を強く
+};
+var pending = null;                 // 次の拍を待っている音 {raw, folded, played, at}
+var slotIdx = 0, nextSlotAt = 0, slotTicks = [];
+function rhythmKey() { var el = document.getElementById("selRhythm"); return el ? el.value : "off"; }
+function rhythmOn() { return rhythmKey() !== "off"; }
+function beatMs() { return 60000 / parseInt(document.getElementById("rngBpm").value, 10); }
+
+function playSlot(p, lenMs, vel, now) {
+  var v = takeVoice();
+  v.freq = midiToFreq(p.played);
+  try { v.synth.triggerAttack(v.freq, undefined, vel / 127); }
+  catch (e) { pushError("slot", e); return; }
+  var seg = { midi: p.played, f: p.folded, t0: now, t1: null, arr: p.at };
+  segs.push(seg); ripples.push(seg); playedNotes++;
+  v.midi = -1; v.at = now; v.seg = seg; v.busy = true;   // 装置のNote Offとは対応させない
+  setTimeout(function () { if (v.seg === seg) releaseVoice(v); }, lenMs * 0.92);
+  lastRec = { raw: p.raw, folded: p.folded, played: p.played, thin: false, waited: now - p.at };
+  lastNoteAt = now;
+}
+setInterval(function () {
+  if (!audioReady || !rhythmOn()) { pending = null; nextSlotAt = 0; return; }
+  var now = Date.now(), pat = RHYTHMS[rhythmKey()];
+  if (!nextSlotAt) { nextSlotAt = now; slotIdx = 0; }
+  if (now < nextSlotAt) return;
+  var i = slotIdx % pat.length, lenMs = pat[i].len * beatMs();
+  slotTicks.push({ t: nextSlotAt, head: i === 0 });
+  if (pending) { playSlot(pending, lenMs, pat[i].vel, now); pending = null; }
+  slotIdx = (i + 1) % pat.length;
+  nextSlotAt += lenMs;
+  if (nextSlotAt < now) nextSlotAt = now + lenMs;      // 大きく遅れたら追いかけない
+}, 8);
+
+function showRhythm() {
+  var on = rhythmOn();
+  document.getElementById("rowBpm").style.opacity = on ? 1 : 0.35;
+  document.getElementById("aWhen").textContent = on ? "拍に載せる（覗くで待ち時間が見える）" : "そのまま";
+  document.getElementById("aLen").textContent  = on ? "リズムの型に従う" : "そのまま";
+  pending = null; nextSlotAt = 0;
+}
+document.getElementById("selRhythm").addEventListener("change", showRhythm);
+document.getElementById("rngBpm").addEventListener("input", function () {
+  document.getElementById("vBpm").textContent = this.value;
+});
+showRhythm();
+
 function stopAll() {
   for (var i = 0; i < voices.length; i++) releaseVoice(voices[i]);
   closeOpenSegs();
@@ -735,6 +808,14 @@ function draw() {
     ctx.moveTo(x1, y);
     ctx.lineTo(Math.max(x2, x1 + 1.5), y);
     ctx.stroke();
+    if (s.arr !== undefined && s.arr < s.t0) {   // 時間の糸 — 届いた瞬間から、拍で鳴った瞬間まで
+      var xa = X(s.arr);
+      ctx.strokeStyle = rgba(THREAD, a * (peek ? 0.9 : 0.4)); ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(x1, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(xa, y, 2, 0, Math.PI * 2); ctx.stroke();
+    }
     if (s.f !== undefined && s.f !== s.midi) {
       var yr = yOf(s.f, h);
       ctx.strokeStyle = rgba(THREAD, a * (peek ? 0.95 : 0.5)); ctx.lineWidth = 1;
@@ -761,6 +842,17 @@ function draw() {
     ctx.beginPath(); ctx.arc(X(sg.t0), yOf(sg.midi, h), rad, 0, Math.PI * 2); ctx.stroke();
   }
 
+  // 覗く: 拍の目盛り（上端）。1拍目の区切りを長く
+  while (slotTicks.length && now - slotTicks[0].t > SPAN_MS) slotTicks.shift();
+  if (peek && rhythmOn()) {
+    var ty0 = h * 0.185;
+    ctx.strokeStyle = rgba(THREAD, 0.55); ctx.lineWidth = 1;
+    for (var b = 0; b < slotTicks.length; b++) {
+      var bx = X(slotTicks[b].t);
+      ctx.beginPath(); ctx.moveTo(bx, ty0); ctx.lineTo(bx, ty0 + (slotTicks[b].head ? 10 : 5)); ctx.stroke();
+    }
+  }
+
   // 覗く: 間引いた音（×）と、翻訳の工程
   while (thinned.length && now - thinned[0].t > SPAN_MS) thinned.shift();
   if (peek) {
@@ -785,7 +877,10 @@ function drawPipeline(w, touching) {
   var st = [
     { k: "植物",   sub: "源",           c: LEAF,   v: !connected ? "未接続" : (touching ? "触れている" : "離れている") },
     { k: "装置",   sub: "中は一部未知", c: GREY,   v: L ? nn(L.raw) : "—" },
-    { k: "間引く", sub: "人の手",       c: THREAD, v: L ? (L.thin ? "間引いた" : "通す") : "—" },
+    rhythmOn()
+      ? { k: "拍に載せる", sub: "人の手", c: THREAD,
+          v: !L ? "—" : (L.wait ? "待っている" : (L.waited !== undefined ? "待ち " + Math.round(L.waited) + "ms" : "—")) }
+      : { k: "間引く", sub: "人の手",     c: THREAD, v: L ? (L.thin ? "間引いた" : "通す") : "—" },
     { k: "畳む",   sub: "人の手",       c: THREAD, v: L ? nn(L.folded) : "—" },
     { k: "丸める", sub: "人の手",       c: THREAD, v: L ? (L.thin ? "—" : nn(L.played)) : "—" }
   ];
