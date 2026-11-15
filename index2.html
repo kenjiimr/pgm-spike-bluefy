@@ -441,7 +441,15 @@ function ensureSampler() {
   return sampler;
 }
 
+/* 鳴っている扱いのまま残った線を閉じる（音源の作り直し・沈黙のとき） */
+function closeOpenSegs() {
+  var now = Date.now();
+  for (var i = 0; i < segs.length; i++) if (segs[i].t1 === null) segs[i].t1 = now;
+}
+
 function buildVoices(kind) {
+  // 作り直すと古い音源とNote Offの対応が切れるので、鳴っている線をここで閉じる
+  closeOpenSegs();
   // サンプラーは使い回すので捨てない。それ以外は捨てる
   if (voiceKind !== "sampler") {
     for (var i = 0; i < voices.length; i++) {
@@ -621,6 +629,7 @@ function noteOff(midi) {
 }
 function stopAll() {
   for (var i = 0; i < voices.length; i++) releaseVoice(voices[i]);
+  closeOpenSegs();
 }
 
 /* ==================================================================
