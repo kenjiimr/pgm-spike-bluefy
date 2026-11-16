@@ -292,6 +292,7 @@
     <dt data-i>毎秒の受信</dt>   <dd id="vRate">0 件/秒</dd>
   <dt data-i>鳴らした音</dt>   <dd id="vCount">0（届いた 0）</dd>
     <dt data-i>音源</dt>         <dd id="vSamp">—</dd>
+    <dt data-i>音声</dt>         <dd id="vAudio">—</dd>
     <dt data-i>エラー</dt>       <dd id="vErr" class="err">—</dd>
   </dl>
   <p class="credit"><span data-i>音源:</span> tonejs-instruments (Nicholaus P. Brosowsky) — samples CC BY 3.0</p>
@@ -421,7 +422,9 @@ var EN = {
   "音律": "Tuning", "12平均律": "12-tone equal", "純正律": "Just intonation",
   "22シュルティ（装置の1段＝1シュルティ）": "22 shruti (one device step = one shruti)",
   "ドローン": "Drone", "オフ": "Off", "基準音（触れている間だけ）": "Reference tone (only while touching)",
-  "読み替える": "Re-read"
+  "読み替える": "Re-read",
+  "音声": "Audio", "タップで音を戻す": "tap to bring the sound back",
+  "動いている": "running", "止まっている": "suspended", "中断": "interrupted", "未開始": "not started"
 };
 var lang = "ja";
 try { if (localStorage.getItem("pgm-lang") === "en") lang = "en"; } catch (e) {}
@@ -1102,6 +1105,7 @@ function togglePeek() { peek = !peek; elPeek.setAttribute("aria-pressed", String
 elPeek.addEventListener("click", function (e) { e.stopPropagation(); togglePeek(); });
 document.querySelector(".screen").addEventListener("click", function (e) {
   if (e.target === elStart) return;
+  if (resumedByTap) { resumedByTap = false; return; }
   togglePeek();
 });
 
@@ -1215,6 +1219,32 @@ function onDisconnected() {
 elStart.addEventListener("click", start);
 
 /* ==================================================================
+   音声の再開 — iOSは、別のアプリへ移ると音声を止め、戻っても止めたままにする。
+   戻ったときに再開を試み、だめならタップの中で再開する（iOSは操作の中でしか再開を許さないことがある）
+================================================================== */
+function rawCtx() { try { return Tone.getContext().rawContext; } catch (e) { return null; } }
+function audioState() {
+  var c = rawCtx();
+  if (!audioReady || !c) return "未開始";
+  return c.state === "running" ? "動いている" : (c.state === "interrupted" ? "中断" : "止まっている");
+}
+var resumedByTap = false;   // 音を戻すためのタップでは「覗く」を開閉しない
+function resumeAudio(ev) {
+  var c = rawCtx();
+  if (!audioReady || !c || c.state === "running") return;
+  if (ev && (ev.type === "touchend" || ev.type === "click")) resumedByTap = true;
+  try {
+    var p = c.resume();
+    if (p && p.catch) p.catch(function (e) { pushError("resume", e); });
+  } catch (e) { pushError("resume", e); }
+}
+document.addEventListener("visibilitychange", function () { if (!document.hidden) resumeAudio(); });
+window.addEventListener("pageshow", resumeAudio);
+window.addEventListener("focus", resumeAudio);
+document.addEventListener("touchend", resumeAudio, true);
+document.addEventListener("click", resumeAudio, true);
+
+/* ==================================================================
    見張りと表示
 ================================================================== */
 /* ドローン（基準音）— 主音と5度（3/2）。触れている間だけ立ち上がり、離すと沈む（D-23を守る） */
@@ -1251,7 +1281,12 @@ setInterval(function () {
   if (state === "受信中" && now - lastRecvAt > SILENCE_MS) { state = "待っている"; stopAll(); }
 
   var connected = (state !== "未接続" && state !== "接続中");
-  if (!connected) {
+  var ast = audioState();
+  document.getElementById("vAudio").textContent = T(ast);
+  if (connected && audioReady && ast !== "動いている") {
+    elHint.textContent = T("タップで音を戻す");          // iOSが音声を止めたまま戻したとき
+    elHint.style.color = "rgba(236,196,140,.95)";
+  } else if (!connected) {
     elHint.textContent = "";
   } else if ((now - lastNoteAt) < QUIET_MS) {
     elHint.textContent = T("鳴っている");
