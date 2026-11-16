@@ -116,6 +116,17 @@
     background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.2);
     border-radius: 16px; padding: 6px 12px;
   }
+  #langBtn {
+    position: absolute; left: 14px; top: calc(env(safe-area-inset-top, 0px) + 10px);
+    font-family: inherit; font-size: 12px; letter-spacing: .12em; color: #cfd4da;
+    background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.2);
+    border-radius: 16px; padding: 6px 12px;
+  }
+  /* 色の約束 — 植物（意図しない）は緑〜紫のにじみ、人（意図する）は金〜朱の輪郭 */
+  .legend { margin: 0 0 20px; font-size: 12px; line-height: 2; color: #8a929b; }
+  .legend i { display: inline-block; width: 26px; height: 8px; border-radius: 4px; margin-right: 8px; vertical-align: 1px; }
+  .legend .swA { background: linear-gradient(90deg, hsl(150,45%,55%), hsl(210,45%,58%), hsl(270,45%,62%)); filter: blur(.6px); }
+  .legend .swB { background: linear-gradient(90deg, hsl(48,82%,66%), hsl(12,80%,64%), hsl(322,70%,68%)); }
   #peekBtn[aria-pressed="true"] { background: rgba(236,196,140,.16); border-color: rgba(236,196,140,.6); }
 
   /* 設定を2群に分ける — 植物から来るもの（層A）／人が加えるもの（層B） */
@@ -129,7 +140,7 @@
     content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     margin-right: 8px; vertical-align: 1px; box-sizing: border-box;
   }
-  .gA .arow > span::before { background: rgb(214,238,226); }
+  .gA .arow > span::before { background: linear-gradient(135deg, hsl(150,45%,58%), hsl(270,45%,64%)); }
   .gB .prow > span::before, .gB .srow > span::before { border: 1px solid rgb(236,196,140); }
 </style>
 </head>
@@ -138,116 +149,123 @@
 <canvas id="cv"></canvas>
 
 <section class="screen">
-  <button id="btnStart">はじまる</button>
+  <button id="langBtn">EN</button>
+  <button id="btnStart" data-i>はじまる</button>
   <div id="hint"></div>
-  <div id="scrollCue">⌄　設定はこの下</div>
-  <button id="peekBtn" aria-pressed="false">覗く</button>
+  <div id="scrollCue" data-i>⌄　設定はこの下</div>
+  <button id="peekBtn" aria-pressed="false" data-i>覗く</button>
 </section>
 
 <section class="settings">
+  <p class="legend"><i class="swA"></i><span data-i>植物（意図しない）— 緑〜紫のにじみ</span><br><i class="swB"></i><span data-i>人（意図する）— 金〜朱の輪郭</span></p>
   <div class="gA">
-  <h2 class="grp">植物から来るもの</h2>
-  <p class="note">変えられない。そのまま鳴らし、そのまま描く。</p>
-  <div class="arow"><span>鳴る瞬間</span><em id="aWhen">そのまま</em></div>
-  <div class="arow"><span>音の長さ</span><em id="aLen">そのまま</em></div>
-  <div class="arow"><span>重なり</span><em>そのまま</em></div>
-  <div class="arow"><span>高さの元</span><em>そのまま（下で丸める）</em></div>
-  <div class="arow"><span>CC80</span><em>描くだけ・音にしない</em></div>
+  <h2 class="grp" data-i>植物から来るもの</h2>
+  <p class="note" data-i>変えられない。そのまま鳴らし、そのまま描く。</p>
+  <div class="arow"><span data-i>鳴る瞬間</span><em id="aWhen" data-i>そのまま</em></div>
+  <div class="arow"><span data-i>音の長さ</span><em id="aLen" data-i>そのまま</em></div>
+  <div class="arow"><span data-i>重なり</span><em data-i>そのまま</em></div>
+  <div class="arow"><span data-i>高さの元</span><em data-i>そのまま（下で丸める）</em></div>
+  <div class="arow"><span data-i>CC80</span><em data-i>描くだけ・音にしない</em></div>
   </div>
 
   <div class="gB">
-  <h2 class="grp">人が加えるもの</h2>
-  <p class="note">加えた分は「覗く」で画面に出る。</p>
-  <div class="prow"><span>音階</span>
+  <h2 class="grp" data-i>人が加えるもの</h2>
+  <p class="note" data-i>加えた分は「覗く」で画面に出る。</p>
+  <div class="prow"><span data-i>音階</span>
     <select id="selScale">
-      <option value="mixolydian" selected>ミクソリディアン</option>
-      <option value="raw">そのまま（丸めない）</option>
-      <option value="dorian">ドリアン</option>
-      <option value="lydian">リディアン</option>
-      <option value="altered">オルタード</option>
-      <option value="okinawa">沖縄音階</option>
-      <option value="yamato">大和音階</option>
-      <option value="miyakobushi">都節音階</option>
-      <option value="ritsu">律旋法</option>
-      <option value="major">長音階</option>
-      <option value="minor">短音階</option>
-      <option value="pentaMajor">ペンタトニック（明）</option>
-      <option value="pentaMinor">ペンタトニック（暗）</option>
+      <option value="mixolydian" selected data-i>ミクソリディアン</option>
+      <option value="raw" data-i>そのまま（丸めない）</option>
+      <option value="dorian" data-i>ドリアン</option>
+      <option value="lydian" data-i>リディアン</option>
+      <option value="altered" data-i>オルタード</option>
+      <option value="okinawa" data-i>沖縄音階（＝ペロッグ5と同じ音程）</option>
+      <option value="pelog1" data-i>ペロッグ1 ≈ 1-♭2-♭3-5-♭6</option>
+      <option value="pelog2" data-i>ペロッグ2 ≈ 1-2-♯4-5-7</option>
+      <option value="pelog3" data-i>ペロッグ3 ≈ 1-3-4-6-♭7</option>
+      <option value="pelog4" data-i>ペロッグ4 ≈ 1-♭2-4-♭5-♭6</option>
+      <option value="pelog5" data-i>ペロッグ5 ≈ 1-3-4-5-7</option>
+      <option value="yamato" data-i>大和音階</option>
+      <option value="miyakobushi" data-i>都節音階</option>
+      <option value="ritsu" data-i>律旋法</option>
+      <option value="major" data-i>長音階</option>
+      <option value="minor" data-i>短音階</option>
+      <option value="pentaMajor" data-i>ペンタトニック（明）</option>
+      <option value="pentaMinor" data-i>ペンタトニック（暗）</option>
     </select>
   </div>
-  <div class="prow"><span>キー</span>
+  <div class="prow"><span data-i>キー</span>
     <select id="selRoot">
-      <option value="0" selected>C</option>
-      <option value="1">C♯ / D♭</option>
-      <option value="2">D</option>
-      <option value="3">D♯ / E♭</option>
-      <option value="4">E</option>
-      <option value="5">F</option>
-      <option value="6">F♯ / G♭</option>
-      <option value="7">G</option>
-      <option value="8">G♯ / A♭</option>
-      <option value="9">A</option>
-      <option value="10">A♯ / B♭</option>
-      <option value="11">B</option>
+      <option value="0" selected data-i>C</option>
+      <option value="1" data-i>C♯ / D♭</option>
+      <option value="2" data-i>D</option>
+      <option value="3" data-i>D♯ / E♭</option>
+      <option value="4" data-i>E</option>
+      <option value="5" data-i>F</option>
+      <option value="6" data-i>F♯ / G♭</option>
+      <option value="7" data-i>G</option>
+      <option value="8" data-i>G♯ / A♭</option>
+      <option value="9" data-i>A</option>
+      <option value="10" data-i>A♯ / B♭</option>
+      <option value="11" data-i>B</option>
     </select>
   </div>
-  <div class="prow"><span>音色</span>
+  <div class="prow"><span data-i>音色</span>
     <select id="selOsc">
-      <option value="marimba" selected>マリンバ風</option>
-      <option value="gamelan">ガムラン風</option>
-      <option value="harp">ハープ（録音）</option>
-      <option value="koto">琴風</option>
-      <option value="sanshin">三線風</option>
-      <option value="triangle">やわらかい</option>
-      <option value="sine">まるい</option>
-      <option value="square">くっきり</option>
-      <option value="sawtooth">ざらつく</option>
-      <option value="sawtooth4">ざらつき控えめ</option>
-      <option value="fatsawtooth">厚い</option>
-      <option value="fattriangle">厚くやわらかい</option>
-      <option value="pwm">ゆらぐ</option>
-      <option value="fmsine">金属的</option>
-      <option value="amtriangle">震える</option>
+      <option value="marimba" selected data-i>マリンバ風</option>
+      <option value="gamelan" data-i>ガムラン風</option>
+      <option value="harp" data-i>ハープ（録音）</option>
+      <option value="koto" data-i>琴風</option>
+      <option value="sanshin" data-i>三線風</option>
+      <option value="triangle" data-i>やわらかい</option>
+      <option value="sine" data-i>まるい</option>
+      <option value="square" data-i>くっきり</option>
+      <option value="sawtooth" data-i>ざらつく</option>
+      <option value="sawtooth4" data-i>ざらつき控えめ</option>
+      <option value="fatsawtooth" data-i>厚い</option>
+      <option value="fattriangle" data-i>厚くやわらかい</option>
+      <option value="pwm" data-i>ゆらぐ</option>
+      <option value="fmsine" data-i>金属的</option>
+      <option value="amtriangle" data-i>震える</option>
     </select>
   </div>
-  <div class="prow"><span>鳴り方</span>
+  <div class="prow"><span data-i>鳴り方</span>
     <select id="selEnv">
-      <option value="auto" selected>音色にまかせる</option>
-      <option value="now">滲む</option>
-      <option value="pluck">弾く</option>
-      <option value="pad">伸びる</option>
-      <option value="dot">点</option>
+      <option value="auto" selected data-i>音色にまかせる</option>
+      <option value="now" data-i>滲む</option>
+      <option value="pluck" data-i>弾く</option>
+      <option value="pad" data-i>伸びる</option>
+      <option value="dot" data-i>点</option>
     </select>
   </div>
-  <div class="prow"><span>音数</span>
+  <div class="prow"><span data-i>音数</span>
     <select id="selVoices">
-      <option value="1">1</option>
-      <option value="2">2</option>
-      <option value="3">3</option>
-      <option value="4">4</option>
-      <option value="6">6</option>
-      <option value="8" selected>8</option>
-      <option value="16">16</option>
+      <option value="1" data-i>1</option>
+      <option value="2" data-i>2</option>
+      <option value="3" data-i>3</option>
+      <option value="4" data-i>4</option>
+      <option value="6" data-i>6</option>
+      <option value="8" selected data-i>8</option>
+      <option value="16" data-i>16</option>
     </select>
   </div>
 
-  <div class="srow"><span>密度</span>
+  <div class="srow"><span data-i>密度</span>
     <input type="range" id="rngDense" min="0" max="100" step="1" value="45">
     <b id="vDense">45</b>
   </div>
-  <div class="srow"><span>音域</span>
+  <div class="srow"><span data-i>音域</span>
     <input type="range" id="rngOct" min="1" max="5" step="1" value="2">
     <b id="vOct">2</b>
   </div>
-  <div class="prow"><span>リズム</span>
+  <div class="prow"><span data-i>リズム</span>
     <select id="selRhythm">
-      <option value="off" selected>オフ（植物の瞬間のまま）</option>
-      <option value="swing">はねる（タン・タ）</option>
-      <option value="straight">均等な刻み</option>
-      <option value="waltz">3拍子（ワルツ）</option>
+      <option value="off" selected data-i>オフ（植物の瞬間のまま）</option>
+      <option value="swing" data-i>はねる（タン・タ）</option>
+      <option value="straight" data-i>均等な刻み</option>
+      <option value="waltz" data-i>3拍子（ワルツ）</option>
     </select>
   </div>
-  <div class="srow" id="rowBpm"><span>BPM</span>
+  <div class="srow" id="rowBpm"><span data-i>BPM</span>
     <input type="range" id="rngBpm" min="20" max="240" step="1" value="72">
     <b id="vBpm">72</b>
   </div>
@@ -255,15 +273,15 @@
 
   <hr>
   <dl>
-    <dt>つながり</dt>     <dd id="vConn">まだ つながっていない</dd>
-    <dt>いま鳴っている</dt><dd id="vNow">0</dd>
-    <dt>届いている値</dt> <dd id="vCC">—</dd>
-    <dt>毎秒の受信</dt>   <dd id="vRate">0 件/秒</dd>
-  <dt>鳴らした音</dt>   <dd id="vCount">0（届いた 0）</dd>
-    <dt>音源</dt>         <dd id="vSamp">—</dd>
-    <dt>エラー</dt>       <dd id="vErr" class="err">—</dd>
+    <dt data-i>つながり</dt>     <dd id="vConn">まだ つながっていない</dd>
+    <dt data-i>いま鳴っている</dt><dd id="vNow">0</dd>
+    <dt data-i>届いている値</dt> <dd id="vCC">—</dd>
+    <dt data-i>毎秒の受信</dt>   <dd id="vRate">0 件/秒</dd>
+  <dt data-i>鳴らした音</dt>   <dd id="vCount">0（届いた 0）</dd>
+    <dt data-i>音源</dt>         <dd id="vSamp">—</dd>
+    <dt data-i>エラー</dt>       <dd id="vErr" class="err">—</dd>
   </dl>
-  <p class="credit">音源: tonejs-instruments (Nicholaus P. Brosowsky) — samples CC BY 3.0</p>
+  <p class="credit"><span data-i>音源:</span> tonejs-instruments (Nicholaus P. Brosowsky) — samples CC BY 3.0</p>
 </section>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
@@ -302,7 +320,13 @@ var SCALES = {
   major:      [0,2,4,5,7,9,11],
   minor:      [0,2,3,5,7,8,10],
   pentaMajor: [0,2,4,7,9],
-  pentaMinor: [0,3,5,7,10]
+  pentaMinor: [0,3,5,7,10],
+  /* ペロッグ（ジャワのガムラン）。本来は平均律ではなく、ここでは12平均律による近似 */
+  pelog1:     [0,1,3,7,8],
+  pelog2:     [0,2,6,7,11],
+  pelog3:     [0,4,5,9,10],
+  pelog4:     [0,1,5,6,8],
+  pelog5:     [0,4,5,7,11]       // 沖縄音階と同じ音程
 };
 var ENV_PRESETS = {
   now:   { attack: 0.02,  decay: 0.25, sustain: 0.25, release: 1.2  },
@@ -334,6 +358,93 @@ var TIMBRES = {
   fmsine:      { osc: "fmsine" },
   amtriangle:  { osc: "amtriangle" }
 };
+
+/* ==================================================================
+   言語 — 日本語の文言を鍵にして英語を引く。辞書に無いものは日本語のまま
+================================================================== */
+var EN = {
+  "はじまる": "Begin", "⌄　設定はこの下": "⌄　Settings below", "覗く": "Peek",
+  "鳴っている": "sounding", "沈黙": "silence",
+  "植物（意図しない）— 緑〜紫のにじみ": "The plant (unintended) — green-to-violet haze",
+  "人（意図する）— 金〜朱の輪郭": "People (intended) — gold-to-vermilion outlines",
+  "植物から来るもの": "FROM THE PLANT", "変えられない。そのまま鳴らし、そのまま描く。": "Not adjustable. Played and drawn as they arrive.",
+  "鳴る瞬間": "Onset", "音の長さ": "Length", "重なり": "Overlap", "高さの元": "Pitch source", "CC80": "CC80",
+  "そのまま": "as is", "そのまま（下で丸める）": "as is (rounded below)", "描くだけ・音にしない": "drawn only, never sounded",
+  "拍に載せる（覗くで待ち時間が見える）": "placed on the beat (Peek shows the wait)", "リズムの型に従う": "follows the rhythm pattern",
+  "人が加えるもの": "ADDED BY PEOPLE", "加えた分は「覗く」で画面に出る。": "Everything added here shows up under Peek.",
+  "音階": "Scale", "キー": "Key", "音色": "Timbre", "鳴り方": "Articulation", "音数": "Voices",
+  "密度": "Density", "音域": "Range", "リズム": "Rhythm", "BPM": "BPM",
+  "ミクソリディアン": "Mixolydian", "そのまま（丸めない）": "As is (no rounding)", "ドリアン": "Dorian", "リディアン": "Lydian",
+  "オルタード": "Altered", "沖縄音階（＝ペロッグ5と同じ音程）": "Okinawan (same intervals as Pelog 5)",
+  "ペロッグ1 ≈ 1-♭2-♭3-5-♭6": "Pelog 1 ≈ 1-♭2-♭3-5-♭6", "ペロッグ2 ≈ 1-2-♯4-5-7": "Pelog 2 ≈ 1-2-♯4-5-7",
+  "ペロッグ3 ≈ 1-3-4-6-♭7": "Pelog 3 ≈ 1-3-4-6-♭7", "ペロッグ4 ≈ 1-♭2-4-♭5-♭6": "Pelog 4 ≈ 1-♭2-4-♭5-♭6",
+  "ペロッグ5 ≈ 1-3-4-5-7": "Pelog 5 ≈ 1-3-4-5-7",
+  "大和音階": "Yamato (yonanuki major)", "都節音階": "Miyako-bushi", "律旋法": "Ritsu", "長音階": "Major", "短音階": "Minor",
+  "ペンタトニック（明）": "Pentatonic (major)", "ペンタトニック（暗）": "Pentatonic (minor)",
+  "マリンバ風": "Marimba-like", "ガムラン風": "Gamelan-like", "ハープ（録音）": "Harp (recorded)", "琴風": "Koto-like", "三線風": "Sanshin-like",
+  "やわらかい": "Soft", "まるい": "Round", "くっきり": "Crisp", "ざらつく": "Rough", "ざらつき控えめ": "Slightly rough",
+  "厚い": "Thick", "厚くやわらかい": "Thick and soft", "ゆらぐ": "Wavering", "金属的": "Metallic", "震える": "Trembling",
+  "音色にまかせる": "Timbre default", "滲む": "Bleed", "弾く": "Plucked", "伸びる": "Sustained", "点": "Dot",
+  "オフ（植物の瞬間のまま）": "Off (the plant's own timing)", "はねる（タン・タ）": "Swing (long–short)",
+  "均等な刻み": "Even", "3拍子（ワルツ）": "Waltz (3/4)",
+  "つながり": "Connection", "いま鳴っている": "Sounding now", "届いている値": "Incoming value", "毎秒の受信": "Messages / sec",
+  "鳴らした音": "Notes played", "音源": "Samples", "エラー": "Errors", "音源:": "Samples:",
+  "未接続": "not connected", "接続中": "connecting", "待っている": "waiting", "受信中": "receiving", "切断": "disconnected",
+  "件/秒": "/ sec", "届いた": "received", "鳴らした": "played",
+  "植物": "Plant", "装置": "Device", "間引く": "Thin", "拍に載せる": "On beat", "畳む": "Fold", "丸める": "Round",
+  "源": "source", "中は一部未知": "partly unknown", "人の手": "by people",
+  "触れている": "touching", "離れている": "not touching", "間引いた": "thinned", "通す": "passed", "待ち": "wait",
+  "糸＝丸める前→後のずれ": "thread = shift made by rounding", "CC80（描くだけ・音にしない）": "CC80 (drawn only, never sounded)",
+  "取得": "fetched", "失敗": "failed", "展開待ち": "decoding", "準備できた": "ready", "（別経路）": " (fallback)",
+  "音源を作れなかった": "could not create the sampler"
+};
+var lang = "ja";
+try { if (localStorage.getItem("pgm-lang") === "en") lang = "en"; } catch (e) {}
+function T(ja) { return (lang === "en" && EN[ja] !== undefined) ? EN[ja] : ja; }
+/* 音源の状態は文言を組み立てているので、語ごとに置き換える */
+function Tsamp(str) {
+  if (lang !== "en") return str;
+  ["音源を作れなかった", "準備できた", "（別経路）", "展開待ち", "取得", "失敗"].forEach(function (k) {
+    str = str.split(k).join(EN[k]);
+  });
+  return str.replace(/（/g, " (").replace(/）/g, ")").replace(/ ・/g, " · ");
+}
+function setText(el, ja) { el.dataset.ja = ja; el.textContent = T(ja); }
+function applyLang() {
+  var els = document.querySelectorAll("[data-i]");
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (el.dataset.ja === undefined || el.dataset.ja === "") el.dataset.ja = el.textContent;
+    el.textContent = T(el.dataset.ja);
+  }
+  document.documentElement.lang = lang;
+  document.getElementById("langBtn").textContent = (lang === "ja") ? "EN" : "日本語";
+}
+document.getElementById("langBtn").addEventListener("click", function (e) {
+  e.stopPropagation();
+  lang = (lang === "ja") ? "en" : "ja";
+  try { localStorage.setItem("pgm-lang", lang); } catch (err) {}
+  applyLang();
+});
+
+/* ==================================================================
+   色 — 植物（意図しない）と人（意図する）を別の約束で塗り、1つの音で重ねる
+   植物: CC80の連続値から決まる色相（緑→青→紫）。にじみ・波紋・地の光
+   人:   音階の何番目の音かで決まる色相（金→朱→紅）。線・糸・格子・拍
+================================================================== */
+var plantHue = 160, plantHueTarget = 160;
+function hueFromCc(v) { return 150 + (v / CC_MAX) * 120; }
+function hsla(hh, ss, ll, aa) {
+  return "hsla(" + hh.toFixed(0) + "," + ss + "%," + ll + "%," + Math.max(0, aa).toFixed(3) + ")";
+}
+function degreeHue(m) {
+  var sc = SCALES[document.getElementById("selScale").value];
+  var root = parseInt(document.getElementById("selRoot").value, 10);
+  var rel = ((m - root) % 12 + 12) % 12;
+  var idx = sc ? sc.indexOf(rel) : rel, n = sc ? sc.length : 12;
+  if (idx < 0) idx = 0;
+  return (48 - idx * (96 / Math.max(1, n - 1)) + 360) % 360;   // 48°（金）から −48°（紅）へ
+}
 
 /* ==================================================================
    状態
@@ -629,7 +740,7 @@ function noteOn(midi, vel) {
   v.freq = midiToFreq(played);
   try { v.synth.triggerAttack(v.freq, undefined, (vel || 100) / 127); }
   catch (e) { pushError("noteOn", e); return; }
-  var seg = { midi: played, f: folded, t0: now, t1: null };
+  var seg = { midi: played, f: folded, t0: now, t1: null, ha: plantHue };
   segs.push(seg);
   ripples.push(seg);
   lastRec = { raw: midi, folded: folded, played: played, thin: false };
@@ -667,7 +778,7 @@ function playSlot(p, lenMs, vel, now) {
   v.freq = midiToFreq(p.played);
   try { v.synth.triggerAttack(v.freq, undefined, vel / 127); }
   catch (e) { pushError("slot", e); return; }
-  var seg = { midi: p.played, f: p.folded, t0: now, t1: null, arr: p.at };
+  var seg = { midi: p.played, f: p.folded, t0: now, t1: null, arr: p.at, ha: plantHue };
   segs.push(seg); ripples.push(seg); playedNotes++;
   v.midi = -1; v.at = now; v.seg = seg; v.busy = true;   // 装置のNote Offとは対応させない
   setTimeout(function () { if (v.seg === seg) releaseVoice(v); }, lenMs * 0.92);
@@ -690,8 +801,8 @@ setInterval(function () {
 function showRhythm() {
   var on = rhythmOn();
   document.getElementById("rowBpm").style.opacity = on ? 1 : 0.35;
-  document.getElementById("aWhen").textContent = on ? "拍に載せる（覗くで待ち時間が見える）" : "そのまま";
-  document.getElementById("aLen").textContent  = on ? "リズムの型に従う" : "そのまま";
+  setText(document.getElementById("aWhen"), on ? "拍に載せる（覗くで待ち時間が見える）" : "そのまま");
+  setText(document.getElementById("aLen"),  on ? "リズムの型に従う" : "そのまま");
   pending = null; nextSlotAt = 0;
 }
 document.getElementById("selRhythm").addEventListener("change", showRhythm);
@@ -744,13 +855,14 @@ function draw() {
   // 触れているか（Note Onが途切れていないか）
   var touching = (now - lastNoteAt) < QUIET_MS;
   glow += ((touching ? 1 : 0) - glow) * 0.05;   // ゆっくり追従＝沈黙が見える
+  plantHue += (plantHueTarget - plantHue) * 0.03;  // 植物の色はゆっくり移ろう
 
   // 地
   ctx.fillStyle = "#07090c";
   ctx.fillRect(0, 0, w, h);
   var bg = ctx.createRadialGradient(w / 2, h * 0.5, 0, w / 2, h * 0.5, Math.max(w, h) * 0.78);
-  bg.addColorStop(0, "rgba(58,116,94," + (0.60 * glow).toFixed(3) + ")");
-  bg.addColorStop(0.55, "rgba(30,62,52," + (0.30 * glow).toFixed(3) + ")");
+  bg.addColorStop(0, hsla(plantHue, 38, 30, 0.62 * glow));
+  bg.addColorStop(0.55, hsla(plantHue, 40, 16, 0.32 * glow));
   bg.addColorStop(1, "rgba(7,9,12,0)");
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
@@ -765,9 +877,10 @@ function draw() {
       if (sc && quantize(m) !== m) continue;
       if (!sc && m % 12 !== 0) continue;           // 丸めないときはCだけ目盛りにする
       var gy = yOf(m, h);
-      ctx.strokeStyle = rgba(THREAD, 0.10); ctx.lineWidth = 1;
+      var gh = degreeHue(m);
+      ctx.strokeStyle = hsla(gh, 70, 62, 0.13); ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
-      ctx.fillStyle = rgba(THREAD, 0.45); ctx.fillText(nn(m), 4, gy - 2);
+      ctx.fillStyle = hsla(gh, 70, 66, 0.6); ctx.fillText(nn(m), 4, gy - 2);
     }
   }
 
@@ -782,11 +895,14 @@ function draw() {
     }
     ctx.lineTo(X(ccHist[ccHist.length - 1].t), h);
     ctx.closePath();
-    ctx.fillStyle = "rgba(90,150,170," + (0.20 * (0.5 + 0.5 * glow)).toFixed(3) + ")";
+    var cg = ctx.createLinearGradient(0, 0, w, 0);
+    cg.addColorStop(0, hsla(hueFromCc(ccHist[0].v), 45, 45, 0.10 * (0.5 + 0.5 * glow)));
+    cg.addColorStop(1, hsla(plantHue, 50, 50, 0.26 * (0.5 + 0.5 * glow)));
+    ctx.fillStyle = cg;
     ctx.fill();
     if (peek) {
-      ctx.fillStyle = "rgba(120,180,200,.6)"; ctx.font = "9px -apple-system, sans-serif"; ctx.textAlign = "left";
-      ctx.fillText("CC80（描くだけ・音にしない）", 6, h - h * 0.16 - 8);
+      ctx.fillStyle = hsla(plantHue, 45, 70, 0.7); ctx.font = "9px -apple-system, sans-serif"; ctx.textAlign = "left";
+      ctx.fillText(T("CC80（描くだけ・音にしない）"), 6, h - h * 0.16 - 8);
     }
   }
 
@@ -802,15 +918,21 @@ function draw() {
     var y  = yOf(s.midi, h);
     var age = (now - end) / SPAN_MS;          // 0（新しい）〜1（消える）
     var a   = (1 - age) * (s.t1 === null ? 0.95 : 0.72) * dim;
-    ctx.strokeStyle = "rgba(214,238,226," + a.toFixed(3) + ")";
+    var hb = degreeHue(s.midi), ha = (s.ha === undefined) ? plantHue : s.ha;
+    if (s.t1 === null) {                       // 鳴っている間だけ、植物の色でにじませる
+      ctx.save();
+      ctx.shadowColor = hsla(ha, 60, 55, 0.9 * dim); ctx.shadowBlur = 12;
+    }
+    ctx.strokeStyle = hsla(hb, 78, 70, a);
     ctx.lineWidth = (s.t1 === null) ? 3.2 : 2.4;
     ctx.beginPath();
     ctx.moveTo(x1, y);
     ctx.lineTo(Math.max(x2, x1 + 1.5), y);
     ctx.stroke();
+    if (s.t1 === null) ctx.restore();
     if (s.arr !== undefined && s.arr < s.t0) {   // 時間の糸 — 届いた瞬間から、拍で鳴った瞬間まで
       var xa = X(s.arr);
-      ctx.strokeStyle = rgba(THREAD, a * (peek ? 0.9 : 0.4)); ctx.lineWidth = 1;
+      ctx.strokeStyle = hsla(hb, 70, 66, a * (peek ? 0.9 : 0.4)); ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
       ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(x1, y); ctx.stroke();
       ctx.setLineDash([]);
@@ -818,13 +940,13 @@ function draw() {
     }
     if (s.f !== undefined && s.f !== s.midi) {
       var yr = yOf(s.f, h);
-      ctx.strokeStyle = rgba(THREAD, a * (peek ? 0.95 : 0.5)); ctx.lineWidth = 1;
+      ctx.strokeStyle = hsla(hb, 70, 66, a * (peek ? 0.95 : 0.5)); ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(x1, yr);
       ctx.quadraticCurveTo(x1 - 6, (yr + y) / 2, x1, y); ctx.stroke();
       ctx.beginPath(); ctx.arc(x1, yr, 2.6, 0, Math.PI * 2); ctx.stroke();
     }
     if (s.t1 === null) {                       // 鳴っている音の先端
-      ctx.fillStyle = "rgba(236,250,243," + (0.9 * dim).toFixed(3) + ")";
+      ctx.fillStyle = hsla(hb, 90, 88, 0.95 * dim);
       ctx.beginPath();
       ctx.arc(x2, y, 3.8, 0, Math.PI * 2);
       ctx.fill();
@@ -838,7 +960,7 @@ function draw() {
     var life = Math.min(4000, dur + 1200), rAge = now - sg.t0;
     if (rAge > life) { ripples.splice(j, 1); continue; }
     var q = rAge / life, rad = 5 + q * (12 + dur / 2500 * 46);
-    ctx.strokeStyle = rgba(LEAF, (1 - q) * 0.5 * dim); ctx.lineWidth = 1.2;
+    ctx.strokeStyle = hsla((sg.ha === undefined) ? plantHue : sg.ha, 55, 66, (1 - q) * 0.55 * dim); ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.arc(X(sg.t0), yOf(sg.midi, h), rad, 0, Math.PI * 2); ctx.stroke();
   }
 
@@ -875,11 +997,11 @@ function drawPipeline(w, touching) {
   var bw = (w - 16 - gap * (n - 1)) / n;
   var connected = (state !== "未接続" && state !== "接続中");
   var st = [
-    { k: "植物",   sub: "源",           c: LEAF,   v: !connected ? "未接続" : (touching ? "触れている" : "離れている") },
+    { k: "植物",   sub: "源",           c: "PLANT", v: !connected ? "未接続" : (touching ? "触れている" : "離れている") },
     { k: "装置",   sub: "中は一部未知", c: GREY,   v: L ? nn(L.raw) : "—" },
     rhythmOn()
       ? { k: "拍に載せる", sub: "人の手", c: THREAD,
-          v: !L ? "—" : (L.wait ? "待っている" : (L.waited !== undefined ? "待ち " + Math.round(L.waited) + "ms" : "—")) }
+          v: !L ? "—" : (L.wait ? "待っている" : (L.waited !== undefined ? T("待ち") + " " + Math.round(L.waited) + "ms" : "—")) }
       : { k: "間引く", sub: "人の手",     c: THREAD, v: L ? (L.thin ? "間引いた" : "通す") : "—" },
     { k: "畳む",   sub: "人の手",       c: THREAD, v: L ? nn(L.folded) : "—" },
     { k: "丸める", sub: "人の手",       c: THREAD, v: L ? (L.thin ? "—" : nn(L.played)) : "—" }
@@ -888,16 +1010,18 @@ function drawPipeline(w, touching) {
   ctx.textAlign = "center";
   for (var i = 0; i < n; i++) {
     var x = 8 + i * (bw + gap), s = st[i];
-    ctx.strokeStyle = rgba(s.c, 0.7); ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, top + 0.5, bw - 1, bh - 1);
-    ctx.fillStyle = rgba(s.c, 0.95); ctx.font = "11px -apple-system, sans-serif";
-    ctx.fillText(s.k, x + bw / 2, top + 14);
-    ctx.fillStyle = "#e6ebf0"; ctx.font = "11.5px -apple-system, sans-serif";
-    ctx.fillText(s.v, x + bw / 2, top + 29);
-    ctx.fillStyle = rgba(s.c, 0.6); ctx.font = "8.5px -apple-system, sans-serif";
-    ctx.fillText(s.sub, x + bw / 2, top + 40);
+    var col = function (aa) { return s.c === "PLANT" ? hsla(plantHue, 50, 68, aa) : rgba(s.c, aa); };
+    ctx.strokeStyle = col(0.7); ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, top + 0.5, bw - 1, bh - 1);
+    ctx.fillStyle = col(0.95); ctx.font = (lang === "en" ? "10px" : "11px") + " -apple-system, sans-serif";
+    ctx.fillText(T(s.k), x + bw / 2, top + 14);
+    var vv = String(s.v).indexOf(T("待ち")) === 0 ? s.v : T(s.v);
+    ctx.fillStyle = "#e6ebf0"; ctx.font = (lang === "en" ? "10.5px" : "11.5px") + " -apple-system, sans-serif";
+    ctx.fillText(vv, x + bw / 2, top + 29);
+    ctx.fillStyle = col(0.6); ctx.font = (lang === "en" ? "7.5px" : "8.5px") + " -apple-system, sans-serif";
+    ctx.fillText(T(s.sub), x + bw / 2, top + 40);
   }
   ctx.textAlign = "left"; ctx.font = "10px -apple-system, sans-serif"; ctx.fillStyle = "rgba(207,212,218,.6)";
-  ctx.fillText("届いた " + recvNotes + "　鳴らした " + playedNotes + "　／ 糸＝丸める前→後のずれ", 8, top + bh + 18);
+  ctx.fillText(T("届いた") + " " + recvNotes + "　" + T("鳴らした") + " " + playedNotes + "　／ " + T("糸＝丸める前→後のずれ"), 8, top + bh + 18);
 }
 
 /* 覗くの開閉 — ボタンか、絵のどこかをタップ */
@@ -964,6 +1088,7 @@ function onValue(ev) {
       else if (type === 0x80 || type === 0x90) noteOff(m.d1);
       else if (type === 0xB0 && m.d1 === CC_TARGET) {
         lastCcVal = m.d2;
+        plantHueTarget = hueFromCc(m.d2);
         ccHist.push({ t: now, v: m.d2 });
       }
     }
@@ -1030,23 +1155,25 @@ setInterval(function () {
   if (!connected) {
     elHint.textContent = "";
   } else if ((now - lastNoteAt) < QUIET_MS) {
-    elHint.textContent = "鳴っている";
+    elHint.textContent = T("鳴っている");
     elHint.style.color = "rgba(214,238,226,.92)";
   } else {
-    elHint.textContent = "沈黙";
+    elHint.textContent = T("沈黙");
     elHint.style.color = "rgba(207,212,218,.34)";
   }
   elCue.style.opacity = connected ? 1 : 0.5;
 
   document.getElementById("vConn").textContent =
-    state + (device && device.name ? "（" + device.name + "）" : "");
+    T(state) + (device && device.name ? "（" + device.name + "）" : "");
   document.getElementById("vNow").textContent  = busyCount();
   document.getElementById("vCC").textContent   = (lastCcVal === null) ? "—" : ("CC80 = " + lastCcVal);
-  document.getElementById("vRate").textContent = rateWindow.length + " 件/秒";
-  document.getElementById("vSamp").textContent = samplerState;
-  document.getElementById("vCount").textContent = playedNotes + "（届いた " + recvNotes + "）";
+  document.getElementById("vRate").textContent = rateWindow.length + " " + T("件/秒");
+  document.getElementById("vSamp").textContent = Tsamp(samplerState);
+  document.getElementById("vCount").textContent = playedNotes + "（" + T("届いた") + " " + recvNotes + "）";
 }, 200);
 
+applyLang();
+showRhythm();
 fit();
 requestAnimationFrame(draw);
 </script>
